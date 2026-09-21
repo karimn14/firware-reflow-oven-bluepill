@@ -51,7 +51,7 @@ Tool tersebut dapat digunakan untuk membantu menyiapkan integrasi project STM32 
 
 Komponen utama yang digunakan:
 
-- STM32 Blue Pill dengan MCU STM32F103C8T6, flash 64 KiB, dan RAM 20 KiB.
+- STM32 Blue Pill dengan MCU STM32F103C8T6 dan RAM 20 KiB. Part C8 secara resmi biasa diperlakukan sebagai flash 64 KiB, tetapi board yang digunakan project ini telah diuji memiliki flash fisik 128 KiB.
 - Kristal HSE 8 MHz pada board Blue Pill; system clock dikonfigurasi ke 72 MHz.
 - OLED SSD1306 128×64, I2C, alamat 7-bit `0x3C`.
 - Thermistor NTC nominal 100 kΩ, Beta bawaan 3950 K.
@@ -171,6 +171,18 @@ Pembagian flash proyek:
 | `0x08000000–0x080007FF` | 2 KiB | STM32 HID Bootloader |
 | `0x08000800–0x0800FBFF` | 61 KiB | Firmware aplikasi |
 | `0x0800FC00–0x0800FFFF` | 1 KiB | Data kalibrasi thermistor |
+
+### Hasil pengujian kapasitas flash board
+
+Board yang digunakan saat ini telah diuji langsung dan terbukti mempunyai **flash fisik 128 KiB**:
+
+- Flash-size register pada `0x1FFFF7E0` melaporkan `128 KiB`.
+- Halaman uji `0x0801F800` berhasil dihapus, ditulis dengan marker, dan diverifikasi.
+- Halaman `0x0800F800` tidak berubah, sehingga area di atas 64 KiB bukan alias dari area bawah.
+- Isi kedua halaman dicadangkan sebelum pengujian dan berhasil dipulihkan byte-for-byte setelah pengujian.
+- Data kalibrasi pada `0x0800FC00` tetap utuh.
+
+Walaupun hardware ini mempunyai 128 KiB, linker project masih sengaja membatasi aplikasi pada layout 64 KiB agar kompatibel dengan STM32F103C8T6 lain yang mungkin benar-benar hanya menyediakan 64 KiB. Area tambahan belum digunakan oleh firmware. Menggunakan seluruh 128 KiB memerlukan perubahan linker script dan pemindahan halaman kalibrasi, serta akan mengurangi portabilitas firmware ke board C8 lain.
 
 Konfigurasi tersebut diterapkan di dua tempat:
 
