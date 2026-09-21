@@ -21,13 +21,14 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "main.h"
-#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "hardware_test.h"
 #include "cdc_console.h"
+#include "heater_characterization.h"
 #include "reflow.h"
+#include "tim.h"
 
 /* USER CODE END Includes */
 
@@ -48,43 +49,23 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-osThreadId_t inputTaskHandle;
-const osThreadAttr_t inputTask_attributes = {
-  .name = "inputTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityAboveNormal,
-};
+static StaticTask_t inputTaskControlBlock;
+static StackType_t inputTaskStack[96];
+TaskHandle_t inputTaskHandle;
 static StaticTask_t cdcTaskControlBlock;
-static StackType_t cdcTaskStack[256];
-osThreadId_t cdcTaskHandle;
-const osThreadAttr_t cdcTask_attributes = {
-  .name = "cdcTask",
-  .cb_mem = &cdcTaskControlBlock,
-  .cb_size = sizeof(cdcTaskControlBlock),
-  .stack_mem = cdcTaskStack,
-  .stack_size = sizeof(cdcTaskStack),
-  .priority = (osPriority_t) osPriorityLow,
-};
+static StackType_t cdcTaskStack[192];
+TaskHandle_t cdcTaskHandle;
 static StaticTask_t reflowTaskControlBlock;
-static StackType_t reflowTaskStack[128];
-osThreadId_t reflowTaskHandle;
-const osThreadAttr_t reflowTask_attributes = {
-  .name = "reflowTask",
-  .cb_mem = &reflowTaskControlBlock,
-  .cb_size = sizeof(reflowTaskControlBlock),
-  .stack_mem = reflowTaskStack,
-  .stack_size = sizeof(reflowTaskStack),
-  .priority = (osPriority_t) osPriorityNormal,
-};
+static StackType_t reflowTaskStack[96];
+TaskHandle_t reflowTaskHandle;
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
-  .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
+TaskHandle_t defaultTaskHandle;
+static StaticTask_t defaultTaskControlBlock;
+static StackType_t defaultTaskStack[192];
+static StaticTask_t idleTaskControlBlock;
+static StackType_t idleTaskStack[configMINIMAL_STACK_SIZE];
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -107,6 +88,7 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
   Reflow_Init();
+  HeaterCharacterization_Init();
 
   /* USER CODE END Init */
 
@@ -128,13 +110,20 @@ void MX_FREERTOS_Init(void) {
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  defaultTaskHandle = xTaskCreateStatic(StartDefaultTask, "defaultTask",
+      sizeof(defaultTaskStack) / sizeof(defaultTaskStack[0]), NULL, 2U,
+      defaultTaskStack, &defaultTaskControlBlock);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  inputTaskHandle = osThreadNew(StartInputTask, NULL, &inputTask_attributes);
-  cdcTaskHandle = osThreadNew(StartCdcTask, NULL, &cdcTask_attributes);
-  reflowTaskHandle = osThreadNew(StartReflowTask, NULL,
-                                 &reflowTask_attributes);
+  inputTaskHandle = xTaskCreateStatic(StartInputTask, "inputTask",
+      sizeof(inputTaskStack) / sizeof(inputTaskStack[0]), NULL, 3U,
+      inputTaskStack, &inputTaskControlBlock);
+  cdcTaskHandle = xTaskCreateStatic(StartCdcTask, "cdcTask",
+      sizeof(cdcTaskStack) / sizeof(cdcTaskStack[0]), NULL, 1U,
+      cdcTaskStack, &cdcTaskControlBlock);
+  reflowTaskHandle = xTaskCreateStatic(StartReflowTask, "thermalTask",
+      sizeof(reflowTaskStack) / sizeof(reflowTaskStack[0]), NULL, 2U,
+      reflowTaskStack, &reflowTaskControlBlock);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -161,7 +150,7 @@ void StartDefaultTask(void *argument)
   for(;;)
   {
     HardwareTest_Run();
-    osDelay(10);
+    vTaskDelay(pdMS_TO_TICKS(10U));
   }
   /* USER CODE END StartDefaultTask */
 }
@@ -175,7 +164,7 @@ void StartInputTask(void *argument)
   for (;;)
   {
     HardwareTest_InputRun();
-    osDelay(10);
+    vTaskDelay(pdMS_TO_TICKS(10U));
   }
 }
 
@@ -187,6 +176,26 @@ void StartCdcTask(void *argument)
 void StartReflowTask(void *argument)
 {
   Reflow_Task(argument);
+}
+
+void vApplicationGetIdleTaskMemory(StaticTask_t **task_buffer,
+                                   StackType_t **stack_buffer,
+                                   uint32_t *stack_size)
+{
+  *task_buffer = &idleTaskControlBlock;
+  *stack_buffer = idleTaskStack;
+  *stack_size = configMINIMAL_STACK_SIZE;
+}
+
+void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)
+{
+  (void)task;
+  (void)task_name;
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
+  taskDISABLE_INTERRUPTS();
+  for (;;)
+  {
+  }
 }
 
 /* USER CODE END Application */

@@ -1,10 +1,11 @@
 #include "reflow.h"
 
-#include "cmsis_os.h"
+#include "FreeRTOS.h"
 #include "hardware_test.h"
+#include "heater_characterization.h"
 #include "main.h"
+#include "task.h"
 
-#include <limits.h>
 #include <string.h>
 
 #define REFLOW_DEFAULT_PREHEAT_TENTHS  600
@@ -33,14 +34,27 @@ static uint32_t profile_started_at;
 static uint32_t stage_started_at;
 static uint32_t last_graph_sample_at;
 static uint32_t last_elapsed_seconds;
-static int16_t graph_temperature_tenths[REFLOW_GRAPH_SAMPLES];
+static uint8_t graph_temperature_degrees[REFLOW_GRAPH_SAMPLES];
 static uint8_t graph_count;
 
 static void record_graph_sample(const HardwareTestStatus *hardware,
                                 uint32_t now)
 {
-  int16_t sample = (hardware->temperature_valid != 0U)
-                   ? hardware->temperature_tenths : INT16_MIN;
+  uint8_t sample = 0xffU;
+
+  if (hardware->temperature_valid != 0U)
+  {
+    int16_t degrees = (int16_t)((hardware->temperature_tenths + 5) / 10);
+    if (degrees < 0)
+    {
+      degrees = 0;
+    }
+    else if (degrees > 254)
+    {
+      degrees = 254;
+    }
+    sample = (uint8_t)degrees;
+  }
 
   if ((now - last_graph_sample_at) < REFLOW_GRAPH_INTERVAL_MS)
   {
@@ -50,13 +64,13 @@ static void record_graph_sample(const HardwareTestStatus *hardware,
 
   if (graph_count < REFLOW_GRAPH_SAMPLES)
   {
-    graph_temperature_tenths[graph_count++] = sample;
+    graph_temperature_degrees[graph_count++] = sample;
   }
   else
   {
-    memmove(&graph_temperature_tenths[0], &graph_temperature_tenths[1],
-            (REFLOW_GRAPH_SAMPLES - 1U) * sizeof(graph_temperature_tenths[0]));
-    graph_temperature_tenths[REFLOW_GRAPH_SAMPLES - 1U] = sample;
+    memmove(&graph_temperature_degrees[0], &graph_temperature_degrees[1],
+            REFLOW_GRAPH_SAMPLES - 1U);
+    graph_temperature_degrees[REFLOW_GRAPH_SAMPLES - 1U] = sample;
   }
 }
 
@@ -220,8 +234,8 @@ void Reflow_GetStatus(ReflowStatus *status)
                             : (HAL_GetTick() - profile_started_at) / 1000UL;
   status->fault = reflow_fault;
   status->graph_count = graph_count;
-  memcpy(status->graph_temperature_tenths, graph_temperature_tenths,
-         graph_count * sizeof(graph_temperature_tenths[0]));
+  memcpy(status->graph_temperature_degrees, graph_temperature_degrees,
+         graph_count);
 }
 
 void Reflow_Task(void *argument)
@@ -288,6 +302,8 @@ void Reflow_Task(void *argument)
       }
     }
 
-    osDelay(REFLOW_TASK_INTERVAL_MS);
+    HeaterCharacterization_Process();
+
+    vTaskDelay(pdMS_TO_TICKS(REFLOW_TASK_INTERVAL_MS));
   }
 }

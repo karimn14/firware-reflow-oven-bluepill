@@ -2,15 +2,15 @@
 
 #include "adc.h"
 #include "gpio.h"
+#include "heater_characterization.h"
 #include "i2c.h"
 #include "main.h"
 #include "reflow.h"
 #include "ssd1306.h"
+#include "text_format.h"
 #include "thermistor.h"
 #include "tim.h"
 
-#include <limits.h>
-#include <stdio.h>
 
 #define OLED_ADDRESS_7BIT       0x3cU
 #define ADC_FULL_SCALE          4095U
@@ -39,6 +39,7 @@
 #define REFLOW_EXIT_HOLD_MS         1500U
 #define REFLOW_REPEAT_RATE_MS        100U
 #define REFLOW_TEMPERATURE_STEP_TENTHS 10
+#define CHARACTERIZATION_EXIT_HOLD_MS 1500U
 
 typedef struct
 {
@@ -57,7 +58,8 @@ typedef enum
   SCREEN_HEATER = 0,
   SCREEN_THERMISTOR_CALIBRATION,
   SCREEN_PID,
-  SCREEN_REFLOW
+  SCREEN_REFLOW,
+  SCREEN_CHARACTERIZATION
 } Screen;
 
 static SSD1306_HandleTypeDef oled;
@@ -67,6 +69,7 @@ static uint32_t last_display_update;
 static uint8_t heater_enabled;
 static uint8_t heater_duty_percent = HEATER_DEFAULT_DUTY;
 static uint8_t heater_manual_duty_percent = HEATER_DEFAULT_DUTY;
+static volatile int16_t heater_safety_limit_tenths;
 static uint16_t handled_press_count[4];
 static Screen current_screen;
 static uint16_t latest_adc;
@@ -97,6 +100,10 @@ static uint8_t reflow_d_armed;
 static uint8_t reflow_d_press_active;
 static uint8_t reflow_d_long_handled;
 static uint32_t reflow_d_pressed_at;
+static uint8_t characterization_d_armed;
+static uint8_t characterization_d_press_active;
+static uint8_t characterization_d_long_handled;
+static uint32_t characterization_d_pressed_at;
 
 static void adjust_pid_setpoint(int16_t change_tenths);
 
@@ -205,6 +212,19 @@ static void set_heater_output(void)
               * heater_duty_percent / 100U;
   }
   __HAL_TIM_SET_COMPARE(&htim3, HEATER_PWM_CHANNEL, compare);
+}
+
+static void enforce_direct_heater_safety(void)
+{
+  if ((heater_safety_limit_tenths > 0)
+      && (heater_enabled != 0U)
+      && ((latest_temperature_valid == 0U)
+          || (Thermistor_IsCalibrated() == 0U)
+          || (latest_temperature_tenths >= heater_safety_limit_tenths)))
+  {
+    heater_enabled = 0U;
+    set_heater_output();
+  }
 }
 
 static float clamp_float(float value, float minimum, float maximum)
@@ -496,12 +516,14 @@ static void enter_reflow_screen(void)
   reflow_d_long_handled = 0U;
 }
 
-static void leave_reflow_screen(void)
+static void enter_characterization_screen(void)
 {
   Reflow_RequestStop();
   pid_stop(0U);
-  heater_duty_percent = heater_manual_duty_percent;
-  current_screen = SCREEN_HEATER;
+  current_screen = SCREEN_CHARACTERIZATION;
+  characterization_d_armed = 0U;
+  characterization_d_press_active = 0U;
+  characterization_d_long_handled = 0U;
 }
 
 static void update_reflow_navigation_button(void)
@@ -536,7 +558,7 @@ static void update_reflow_navigation_button(void)
                  >= REFLOW_EXIT_HOLD_MS))
     {
       reflow_d_long_handled = 1U;
-      leave_reflow_screen();
+      enter_characterization_screen();
     }
   }
   else if (reflow_d_press_active != 0U)
@@ -547,6 +569,56 @@ static void update_reflow_navigation_button(void)
     }
     reflow_d_press_active = 0U;
     reflow_d_long_handled = 0U;
+  }
+}
+
+static void leave_characterization_screen(void)
+{
+  HeaterCharacterization_RequestStop();
+  HardwareTest_HeaterStop();
+  heater_duty_percent = heater_manual_duty_percent;
+  current_screen = SCREEN_HEATER;
+}
+
+static void update_characterization_navigation_button(void)
+{
+  uint8_t pressed;
+
+  if (current_screen != SCREEN_CHARACTERIZATION)
+  {
+    return;
+  }
+
+  pressed = buttons[3].stable_pressed;
+  if (characterization_d_armed == 0U)
+  {
+    if (pressed == 0U)
+    {
+      characterization_d_armed = 1U;
+    }
+    return;
+  }
+
+  if (pressed != 0U)
+  {
+    if (characterization_d_press_active == 0U)
+    {
+      characterization_d_press_active = 1U;
+      characterization_d_long_handled = 0U;
+      characterization_d_pressed_at = HAL_GetTick();
+    }
+    else if ((characterization_d_long_handled == 0U)
+             && ((HAL_GetTick() - characterization_d_pressed_at)
+                 >= CHARACTERIZATION_EXIT_HOLD_MS))
+    {
+      characterization_d_long_handled = 1U;
+      leave_characterization_screen();
+    }
+  }
+  else if (characterization_d_press_active != 0U)
+  {
+    characterization_d_press_active = 0U;
+    characterization_d_long_handled = 0U;
   }
 }
 
@@ -651,7 +723,7 @@ static void update_controls(void)
           break;
       }
     }
-    else
+    else if (current_screen == SCREEN_REFLOW)
     {
       switch (i)
       {
@@ -675,6 +747,33 @@ static void update_controls(void)
           break;
         case 3U:
           /* Short/long actions are resolved on release/time. */
+          break;
+        default:
+          break;
+      }
+    }
+    else
+    {
+      switch (i)
+      {
+        case 0U:
+          if (HeaterCharacterization_IsRunning() != 0U)
+          {
+            HeaterCharacterization_RequestStop();
+          }
+          else
+          {
+            HeaterCharacterization_RequestStart();
+          }
+          break;
+        case 1U:
+          HeaterCharacterization_AdjustDuty(1);
+          break;
+        case 2U:
+          HeaterCharacterization_AdjustDuty(-1);
+          break;
+        case 3U:
+          /* Hold action is resolved by the navigation handler. */
           break;
         default:
           break;
@@ -732,7 +831,7 @@ static void draw_button_line(uint8_t row,
                              const ButtonState *second)
 {
   char line[22];
-  (void)snprintf(line, sizeof(line), "%c:%c%03u %c:%c%03u",
+  (void)TextFormat(line, sizeof(line), "%c:%c%03u %c:%c%03u",
                  first_name, first->stable_pressed ? 'P' : '-',
                  first->press_count,
                  second_name, second->stable_pressed ? 'P' : '-',
@@ -743,7 +842,7 @@ static void draw_button_line(uint8_t row,
 static void format_temperature(char *text, size_t size, int16_t tenths)
 {
   int16_t magnitude = (tenths < 0) ? (int16_t)-tenths : tenths;
-  (void)snprintf(text, size, "%s%d.%d", (tenths < 0) ? "-" : "",
+  (void)TextFormat(text, size, "%s%d.%d", (tenths < 0) ? "-" : "",
                  magnitude / 10, magnitude % 10);
 }
 
@@ -752,13 +851,13 @@ static void draw_heater_screen(uint32_t millivolts)
   char line[22];
 
   SSD1306_DrawString(&oled, 0U, 0U, "SSR HEATER TEST");
-  (void)snprintf(line, sizeof(line), "SSR:%s DUTY:%3u%%",
+  (void)TextFormat(line, sizeof(line), "SSR:%s DUTY:%3u%%",
                  heater_enabled ? "RUN" : "OFF", heater_duty_percent);
   SSD1306_DrawString(&oled, 0U, 1U, line);
   draw_button_line(2U, 'A', &buttons[0], 'B', &buttons[1]);
   draw_button_line(3U, 'C', &buttons[2], 'D', &buttons[3]);
 
-  (void)snprintf(line, sizeof(line), "ADC:%4u %4lumV", latest_adc,
+  (void)TextFormat(line, sizeof(line), "ADC:%4u %4lumV", latest_adc,
                  (unsigned long)millivolts);
   SSD1306_DrawString(&oled, 0U, 5U, line);
 
@@ -767,12 +866,12 @@ static void draw_heater_screen(uint32_t millivolts)
     char temperature[10];
     format_temperature(temperature, sizeof(temperature),
                        latest_temperature_tenths);
-    (void)snprintf(line, sizeof(line), "NTC:%s C %s", temperature,
+    (void)TextFormat(line, sizeof(line), "NTC:%s C %s", temperature,
                    Thermistor_IsCalibrated() ? "CAL" : "DEF");
   }
   else
   {
-    (void)snprintf(line, sizeof(line), "NTC: OPEN/SHORT");
+    (void)TextFormat(line, sizeof(line), "NTC: OPEN/SHORT");
   }
   SSD1306_DrawString(&oled, 0U, 6U, line);
   SSD1306_DrawString(&oled, 0U, 7U, "A:ON B:+ C:- D:CAL");
@@ -800,20 +899,20 @@ static void draw_calibration_screen(void)
     format_temperature(point_2, sizeof(point_2), p2->reference_tenths);
   }
 
-  (void)snprintf(line, sizeof(line), "THERMISTOR CAL P%u",
+  (void)TextFormat(line, sizeof(line), "THERMISTOR CAL P%u",
                  calibration_point_index + 1U);
   SSD1306_DrawString(&oled, 0U, 0U, line);
-  (void)snprintf(line, sizeof(line), "ADC:%4u R:%lu", latest_adc,
+  (void)TextFormat(line, sizeof(line), "ADC:%4u R:%lu", latest_adc,
                  (unsigned long)latest_resistance_ohm);
   SSD1306_DrawString(&oled, 0U, 1U, line);
-  (void)snprintf(line, sizeof(line), "MEAS:%s C", measured);
+  (void)TextFormat(line, sizeof(line), "MEAS:%s C", measured);
   SSD1306_DrawString(&oled, 0U, 2U, line);
-  (void)snprintf(line, sizeof(line), "REF :%s C %s", reference,
+  (void)TextFormat(line, sizeof(line), "REF :%s C %s", reference,
                  calibration_reference_tracks_measurement ? "AUTO" : "SET");
   SSD1306_DrawString(&oled, 0U, 3U, line);
-  (void)snprintf(line, sizeof(line), "P1:%.6s P2:%.6s", point_1, point_2);
+  (void)TextFormat(line, sizeof(line), "P1:%.6s P2:%.6s", point_1, point_2);
   SSD1306_DrawString(&oled, 0U, 4U, line);
-  (void)snprintf(line, sizeof(line), "HEAT:%s PWM:%3u%%",
+  (void)TextFormat(line, sizeof(line), "HEAT:%s PWM:%3u%%",
                  heater_enabled ? "RUN" : "OFF", heater_duty_percent);
   SSD1306_DrawString(&oled, 0U, 5U, line);
   SSD1306_DrawString(&oled, 0U, 6U, "A:CAP B:+.1 C:-.1");
@@ -840,23 +939,23 @@ static void draw_pid_screen(void)
                      ramped_tenths);
 
   SSD1306_DrawString(&oled, 0U, 0U, "TEMPERATURE PID");
-  (void)snprintf(line, sizeof(line), "PV:%.6s SP:%.6s",
+  (void)TextFormat(line, sizeof(line), "PV:%.6s SP:%.6s",
                  process_value, setpoint);
   SSD1306_DrawString(&oled, 0U, 1U, line);
-  (void)snprintf(line, sizeof(line), "R:%.6s OUT:%3u%%", ramped_setpoint,
+  (void)TextFormat(line, sizeof(line), "R:%.6s OUT:%3u%%", ramped_setpoint,
                  (unsigned int)(pid_output_percent + 0.5f));
   SSD1306_DrawString(&oled, 0U, 2U, line);
-  (void)snprintf(line, sizeof(line), "STATE:%s",
+  (void)TextFormat(line, sizeof(line), "STATE:%s",
                  pid_fault ? "FAULT" : (pid_running ? "RUN" : "READY"));
   SSD1306_DrawString(&oled, 0U, 3U, line);
-  (void)snprintf(line, sizeof(line), "P:%d I:%d D:%d",
+  (void)TextFormat(line, sizeof(line), "P:%d I:%d D:%d",
                  (int)pid_p_term, (int)pid_i_term, (int)pid_d_term);
   SSD1306_DrawString(&oled, 0U, 4U, line);
-  (void)snprintf(line, sizeof(line), "CAL:%s SAFE<150C",
+  (void)TextFormat(line, sizeof(line), "CAL:%s SAFE<150C",
                  Thermistor_IsCalibrated() ? "OK" : "NO");
   SSD1306_DrawString(&oled, 0U, 5U, line);
   SSD1306_DrawString(&oled, 0U, 6U, "A:RUN B:+.5 C:-.5");
-  SSD1306_DrawString(&oled, 0U, 7U, "D:OFF/BACK");
+  SSD1306_DrawString(&oled, 0U, 7U, "D:OFF/REFLOW");
 }
 
 static const char *reflow_state_name(ReflowState state)
@@ -913,7 +1012,7 @@ static void draw_reflow_screen(void)
                        latest_temperature_tenths);
   }
 
-  (void)snprintf(line, sizeof(line), "%s %sC %lus",
+  (void)TextFormat(line, sizeof(line), "%s %sC %lus",
                  reflow_state_name(status.state), temperature,
                  (unsigned long)status.elapsed_seconds);
   SSD1306_DrawString(&oled, 0U, 0U, line);
@@ -923,7 +1022,7 @@ static void draw_reflow_screen(void)
   preheat_degrees = (uint8_t)(status.preheat_tenths / 10);
   soaking_degrees = (uint8_t)(status.soaking_tenths / 10);
   reflow_degrees = (uint8_t)(status.reflow_tenths / 10);
-  (void)snprintf(line, sizeof(line), "P%03u S%03u R%03u >%c",
+  (void)TextFormat(line, sizeof(line), "P%03u S%03u R%03u >%c",
                  preheat_degrees, soaking_degrees, reflow_degrees,
                  selected_name);
   SSD1306_DrawString(&oled, 0U, 1U, line);
@@ -964,14 +1063,14 @@ static void draw_reflow_screen(void)
 
   for (uint8_t i = 0U; i < status.graph_count; ++i)
   {
-    int16_t sample = status.graph_temperature_tenths[i];
-    if (sample == INT16_MIN)
+    uint8_t sample = status.graph_temperature_degrees[i];
+    if (sample == 0xffU)
     {
       previous_valid = 0U;
       continue;
     }
 
-    uint8_t y = reflow_graph_y(sample);
+    uint8_t y = reflow_graph_y((int16_t)sample * 10);
     if (previous_valid != 0U)
     {
       SSD1306_DrawLine(&oled, previous_x, previous_y, i, y);
@@ -985,19 +1084,98 @@ static void draw_reflow_screen(void)
     previous_y = y;
   }
 
-  (void)snprintf(line, sizeof(line), "%sOUT:%3u%% TGT:%3dC",
+  (void)TextFormat(line, sizeof(line), "%sOUT:%3u%% TGT:%3dC",
                  status.fault ? "!" : " ", heater_duty_percent,
                  target / 10);
   SSD1306_DrawString(&oled, 0U, 6U, line);
   SSD1306_DrawString(&oled, 0U, 7U,
                      (status.state == REFLOW_STATE_IDLE)
                      ? "A:RUN B:+ C:- D:SEL"
-                     : "A:STOP D-HOLD:BACK");
+                     : "A:STOP D-HOLD:NEXT");
+}
+
+static const char *characterization_fault_name(
+    HeaterCharacterizationFault fault)
+{
+  switch (fault)
+  {
+    case HEATER_CHARACTERIZATION_FAULT_SENSOR:
+      return "SENSOR";
+    case HEATER_CHARACTERIZATION_FAULT_CALIBRATION:
+      return "CAL";
+    case HEATER_CHARACTERIZATION_FAULT_START_HOT:
+      return "HOT";
+    case HEATER_CHARACTERIZATION_FAULT_HEATING_TIMEOUT:
+      return "HEAT-TIME";
+    case HEATER_CHARACTERIZATION_FAULT_COOLING_TIMEOUT:
+      return "COOL-TIME";
+    case HEATER_CHARACTERIZATION_FAULT_ABORTED:
+      return "ABORT";
+    case HEATER_CHARACTERIZATION_FAULT_NONE:
+    default:
+      return "NONE";
+  }
+}
+
+static void draw_characterization_screen(void)
+{
+  HeaterCharacterizationStatus status;
+  char line[22];
+  char temperature[8] = "--.-";
+  char peak[8];
+  char overshoot[8];
+  int32_t rate_magnitude;
+  int32_t average_magnitude;
+
+  HeaterCharacterization_GetStatus(&status);
+  if (latest_temperature_valid != 0U)
+  {
+    format_temperature(temperature, sizeof(temperature),
+                       latest_temperature_tenths);
+  }
+  format_temperature(peak, sizeof(peak), status.peak_temperature_tenths);
+  format_temperature(overshoot, sizeof(overshoot), status.overshoot_tenths);
+  rate_magnitude = (status.rate_milli_c_per_s < 0)
+                   ? -status.rate_milli_c_per_s
+                   : status.rate_milli_c_per_s;
+  average_magnitude = (status.average_rate_milli_c_per_s < 0)
+                      ? -status.average_rate_milli_c_per_s
+                      : status.average_rate_milli_c_per_s;
+
+  (void)TextFormat(line, sizeof(line), "%s %sC",
+                   HeaterCharacterization_StateName(status.state),
+                   temperature);
+  SSD1306_DrawString(&oled, 0U, 0U, line);
+  (void)TextFormat(line, sizeof(line), "DUTY:%3u%% CUT:110C",
+                   status.duty_percent);
+  SSD1306_DrawString(&oled, 0U, 1U, line);
+  (void)TextFormat(line, sizeof(line), "RATE:%c%lu.%03luC/s",
+                   (status.rate_milli_c_per_s < 0) ? '-' : '+',
+                   (unsigned long)(rate_magnitude / 1000L),
+                   (unsigned long)(rate_magnitude % 1000L));
+  SSD1306_DrawString(&oled, 0U, 2U, line);
+  (void)TextFormat(line, sizeof(line), "AVG :%c%lu.%03luC/s",
+                   (status.average_rate_milli_c_per_s < 0) ? '-' : '+',
+                   (unsigned long)(average_magnitude / 1000L),
+                   (unsigned long)(average_magnitude % 1000L));
+  SSD1306_DrawString(&oled, 0U, 3U, line);
+  (void)TextFormat(line, sizeof(line), "PEAK:%sC OV:%sC", peak, overshoot);
+  SSD1306_DrawString(&oled, 0U, 4U, line);
+  (void)TextFormat(line, sizeof(line), "TIME:%lus F:%s",
+                   (unsigned long)(status.elapsed_ms / 1000UL),
+                   characterization_fault_name(status.fault));
+  SSD1306_DrawString(&oled, 0U, 5U, line);
+  SSD1306_DrawString(&oled, 0U, 6U, "D-HOLD:BACK");
+  SSD1306_DrawString(&oled, 0U, 7U,
+                     HeaterCharacterization_IsRunning()
+                     ? "A:STOP AUTO LOGGING"
+                     : "A:RUN B:+25 C:-25");
 }
 
 void HardwareTest_Init(void)
 {
   hardware_initialized = 0U;
+  heater_safety_limit_tenths = 0;
   /* Start PWM at 0% so PA6 and the SSR are guaranteed OFF at boot. */
   __HAL_TIM_SET_COMPARE(&htim3, HEATER_PWM_CHANNEL, 0U);
   if (HAL_TIM_PWM_Start(&htim3, HEATER_PWM_CHANNEL) != HAL_OK)
@@ -1034,8 +1212,10 @@ void HardwareTest_InputRun(void)
   update_controls();
   update_calibration_heater_button();
   update_reflow_navigation_button();
+  update_characterization_navigation_button();
   update_button_auto_repeat();
   update_pid_controller();
+  enforce_direct_heater_safety();
 }
 
 void HardwareTest_Run(void)
@@ -1058,6 +1238,7 @@ void HardwareTest_Run(void)
   latest_adc = adc;
   latest_temperature_valid = Thermistor_Calculate(
       latest_adc, &latest_temperature_tenths, &latest_resistance_ohm);
+  enforce_direct_heater_safety();
   if ((current_screen == SCREEN_THERMISTOR_CALIBRATION)
       && ((latest_temperature_valid == 0U)
           || (latest_temperature_tenths >= CALIBRATION_MAX_TEMP_TENTHS)))
@@ -1083,9 +1264,13 @@ void HardwareTest_Run(void)
     {
       draw_pid_screen();
     }
-    else
+    else if (current_screen == SCREEN_REFLOW)
     {
       draw_reflow_screen();
+    }
+    else
+    {
+      draw_characterization_screen();
     }
 
     if (SSD1306_Update(&oled) != HAL_OK)
@@ -1143,4 +1328,32 @@ void HardwareTest_PIDSetSetpoint(int16_t setpoint_tenths)
 void HardwareTest_PIDStop(void)
 {
   pid_stop(0U);
+}
+
+uint8_t HardwareTest_HeaterStartAtDuty(uint8_t duty,
+                                       int16_t safety_limit_tenths)
+{
+  pid_stop(0U);
+  if ((duty == 0U) || (duty > 100U)
+      || (safety_limit_tenths <= 0)
+      || (latest_temperature_valid == 0U)
+      || (Thermistor_IsCalibrated() == 0U)
+      || (latest_temperature_tenths >= safety_limit_tenths))
+  {
+    HardwareTest_HeaterStop();
+    return 0U;
+  }
+
+  heater_duty_percent = duty;
+  heater_safety_limit_tenths = safety_limit_tenths;
+  heater_enabled = 1U;
+  set_heater_output();
+  return 1U;
+}
+
+void HardwareTest_HeaterStop(void)
+{
+  heater_enabled = 0U;
+  heater_safety_limit_tenths = 0;
+  set_heater_output();
 }

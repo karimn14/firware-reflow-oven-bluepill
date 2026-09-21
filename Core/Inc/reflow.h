@@ -35,7 +35,7 @@ typedef struct
   uint32_t elapsed_seconds;
   uint8_t fault;
   uint8_t graph_count;
-  int16_t graph_temperature_tenths[REFLOW_GRAPH_SAMPLES];
+  uint8_t graph_temperature_degrees[REFLOW_GRAPH_SAMPLES];
 } ReflowStatus;
 
 void Reflow_Init(void);

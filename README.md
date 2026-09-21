@@ -1,6 +1,6 @@
 # Firmware Reflow Oven STM32 Blue Pill
 
-Firmware eksperimental untuk pengujian hardware dan kendali suhu *hot plate* berbasis **STM32F103C8T6 (Blue Pill)**. Proyek ini membaca thermistor NTC, menampilkan status pada OLED SSD1306, menerima input dari empat tombol, dan mengendalikan heater melalui SSR menggunakan PWM. Firmware berjalan di atas STM32 HAL dan FreeRTOS/CMSIS-RTOS v2.
+Firmware eksperimental untuk pengujian hardware dan kendali suhu *hot plate* berbasis **STM32F103C8T6 (Blue Pill)**. Proyek ini membaca thermistor NTC, menampilkan status pada OLED SSD1306, menerima input dari empat tombol, dan mengendalikan heater melalui SSR menggunakan PWM. Firmware berjalan di atas STM32 HAL dan FreeRTOS.
 
 > [!IMPORTANT]
 > Firmware ini dibuat untuk berjalan bersama [Serasidis STM32 HID Bootloader](https://github.com/Serasidis/STM32_HID_Bootloader). Aplikasi **bukan** ditempatkan di awal flash: vector table aplikasi dimulai di `0x08000800`, setelah area bootloader 2 KiB.
@@ -41,13 +41,14 @@ Tool tersebut dapat digunakan untuk membantu menyiapkan integrasi project STM32 
 - Kendali suhu PID dengan *setpoint ramp*, filter derivatif, pembatas integral, dan pembatas daya ketika mendekati target.
 - Profil PCB reflow POC otomatis dengan tahap preheat, soaking, reflow, dan cooling; target puncak dibatasi 120 °C.
 - Halaman OLED reflow dengan status tahap, target, output heater, waktu proses, dan grafik suhu bergulir.
-- Proteksi heater ketika sensor tidak valid atau suhu mencapai 150 °C.
+- Mode karakterisasi heater otomatis dengan duty tetap, cutoff 110 °C, pengukuran °C/s, overshoot, cooling, dan log CSV USB.
+- Proteksi heater pada 150 °C untuk PID, 125 °C untuk reflow POC, dan 110 °C untuk karakterisasi.
 - Antarmuka OLED 128×64 berbasis SSD1306 melalui I2C 400 kHz.
 - Empat tombol aktif-low dengan pull-up internal, debounce, dan auto-repeat.
 - USB Full Speed sebagai Virtual COM Port (CDC).
 - Console interaktif USB CDC untuk PuTTY, `screen`, atau serial monitor lain.
 - Masuk ke HID bootloader melalui reset yang dipicu oleh utilitas flashing pada port USB CDC.
-- FreeRTOS dengan task terpisah untuk pembacaan input/kendali, pembaruan sensor/display, sequencer reflow, dan console USB CDC.
+- FreeRTOS dengan task terpisah untuk input/kendali, sensor/display, sequencer thermal reflow/karakterisasi, dan console USB CDC.
 
 ## Hardware
 
@@ -114,7 +115,7 @@ Saat boot, output heater dipastikan 0%, ADC dikalibrasi, data kalibrasi thermist
 | C | Menurunkan duty cycle sebesar 25% |
 | D | Masuk ke kalibrasi thermistor |
 
-Duty cycle awal adalah 50%. Timer heater menggunakan periode 1 detik (PWM 1 Hz), sesuai untuk pengujian SSR zero-cross. Mode ini adalah mode manual; operator tetap bertanggung jawab mengawasi suhu dan sistem daya.
+Duty cycle awal adalah 50%. Timer heater menggunakan periode 1 detik (PWM 1 Hz), sesuai untuk pengujian SSR zero-cross. Mode ini adalah mode manual dan tidak memiliki cutoff suhu otomatis; operator tetap bertanggung jawab mengawasi suhu dan sistem daya. Gunakan mode karakterisasi, bukan mode manual, untuk pengujian kemampuan heater dengan cutoff 110 °C.
 
 ### 2. Kalibrasi thermistor dua titik
 
@@ -184,7 +185,7 @@ Durasi setiap tahap pemanasan masih tetap di dalam firmware. Target suhu dapat d
 | B | Menaikkan target tahap terpilih 1 °C; tahan untuk auto-repeat |
 | C | Menurunkan target tahap terpilih 1 °C; tahan untuk auto-repeat |
 | D singkat | Memilih target Preheat (`P`), Soaking (`S`), atau Reflow (`R`) |
-| D ditahan ≥1,5 detik | Menghentikan profil, mematikan heater, dan kembali ke layar pengujian heater |
+| D ditahan ≥1,5 detik | Menghentikan profil, mematikan heater, dan membuka halaman karakterisasi heater |
 
 Firmware menjaga urutan target `Preheat < Soaking < Reflow` dengan selisih minimum 5 °C. Target preheat tidak dapat diturunkan di bawah 40 °C dan target puncak reflow tidak dapat dinaikkan di atas 120 °C. Perubahan target dikunci selama profil berjalan. Pengaturan profil belum disimpan ke flash dan kembali ke nilai bawaan setelah reset.
 
@@ -194,6 +195,55 @@ Profil hanya dapat dimulai jika thermistor sudah dikalibrasi dan pembacaannya va
 
 > [!WARNING]
 > Profil 120 °C ini hanya untuk proof-of-concept dan tidak cukup untuk proses solder reflow produksi. Batas 120 °C adalah batas **target**; inersia termal masih dapat menyebabkan overshoot, sehingga firmware menggunakan cutoff tambahan pada 125 °C. Tetap gunakan pengaman termal independen dan pengawasan operator.
+
+### 5. Karakterisasi heater otomatis
+
+Tahan tombol D minimal 1,5 detik pada halaman reflow untuk membuka **HEATER CHARACTERIZATION**. Mode ini memberikan duty PWM tetap agar kemampuan plant dapat diukur tanpa dipengaruhi ramp PID.
+
+| Tombol | Fungsi pada halaman karakterisasi |
+|---|---|
+| A | Memulai pengujian; saat pengujian aktif, menghentikan pengujian dan mematikan heater |
+| B | Menaikkan duty 25% |
+| C | Menurunkan duty 25% |
+| D ditahan ≥1,5 detik | Menghentikan pengujian dan kembali ke layar pengujian heater |
+
+Duty bawaan adalah 25% dan dapat dipilih menjadi 25%, 50%, 75%, atau 100% ketika pengujian tidak aktif. Pengujian hanya dapat dimulai jika thermistor sudah dikalibrasi, sensor valid, dan suhu awal ≤50 °C.
+
+Urutan pengujian otomatis:
+
+1. State **HEATING** menjalankan heater pada duty yang dipilih.
+2. Firmware menghitung laju suhu setiap jendela 10 detik serta laju rata-rata sejak pengujian dimulai.
+3. Pada suhu 110 °C, heater dimatikan dan state berpindah ke **COOLING**.
+4. Firmware terus merekam suhu puncak dan overshoot setelah heater dimatikan.
+5. State menjadi **COMPLETE** ketika suhu kembali hingga 3 °C di atas suhu awal.
+
+Proteksi tambahan mematikan heater langsung ketika sensor menjadi invalid atau mencapai cutoff 110 °C. Pemanasan dibatasi maksimal 15 menit dan pencatatan cooling maksimal 30 menit. OLED menampilkan state, suhu, duty, laju saat ini, laju rata-rata, suhu puncak, overshoot, waktu, dan fault.
+
+Saat terminal USB CDC terhubung, firmware otomatis mengirim sampel CSV setiap detik dengan header:
+
+```text
+elapsed_ms,state,duty_pct,temp_tenths_c,rate_milli_c_per_s,peak_tenths_c,overshoot_tenths_c,fault
+```
+
+Nilai suhu CSV menggunakan satuan sepersepuluh derajat Celsius; misalnya `875` berarti 87,5 °C. Laju menggunakan mili-°C/detik; `583` berarti 0,583 °C/detik. Kode fault: `0` normal, `1` sensor invalid, `2` belum dikalibrasi, `3` suhu awal terlalu tinggi, `4` timeout pemanasan, `5` timeout cooling, dan `6` dibatalkan operator.
+
+> [!IMPORTANT]
+> Mode karakterisasi mengurangi risiko kesalahan pencatatan, tetapi bukan pengaman kelistrikan atau termal independen. Gunakan thermal fuse/thermostat, sekering, isolasi, dan pemutus daya fisik yang sesuai.
+
+## Optimasi RAM
+
+Firmware menggunakan alokasi task FreeRTOS statis dan tidak menggunakan heap FreeRTOS dinamis. Fitur FreeRTOS yang tidak digunakan, seperti software timer, mutex, dan counting semaphore, dinonaktifkan. Jumlah level prioritas disesuaikan menjadi empat sambil mempertahankan urutan prioritas task. Pemeriksaan stack overflow level 2 tetap aktif dan memaksa output heater menjadi 0 jika overflow terdeteksi.
+
+Buffer RX/TX USB CDC disesuaikan dengan ukuran maksimum paket Full Speed 64 byte, sedangkan ring buffer console 256 byte tetap dipertahankan. Riwayat grafik reflow tetap 128 sampel tetapi disimpan sebagai derajat terkuantisasi satu byte karena resolusi vertikal OLED hanya 32 piksel. Formatter teks ringan menggantikan `snprintf` pada UI dan console.
+
+Hasil build Release setelah karakterisasi ditambahkan:
+
+| Kondisi | RAM | Persentase RAM 20 KiB |
+|---|---:|---:|
+| Sebelum optimasi | 17.304 byte | 84,49% |
+| Setelah optimasi | 9.480 byte | 46,29% |
+
+Penggunaan RAM turun 7.824 byte tanpa menghapus task input, display, thermal control, USB CDC, PID, reflow, maupun grafik OLED. Konfigurasi RAM ini berada pada file generated seperti `freertos.c`, `FreeRTOSConfig.h`, dan konfigurasi USB; periksa kembali perubahan tersebut jika project diregenerasi dengan STM32CubeMX.
 
 ## STM32 HID bootloader
 
@@ -289,6 +339,8 @@ Console saat ini bersifat read-only terhadap sistem kontrol: tidak tersedia peri
 
 Data USB diterima oleh callback CDC dan dimasukkan ke ring buffer 256 byte. Task `cdcTask` memproses command tanpa melakukan pekerjaan berat di dalam interrupt USB. Panjang maksimum satu command adalah 95 karakter.
 
+Selama karakterisasi heater aktif, task console juga mengirim satu baris CSV setiap detik. Console tetap menerima command, tetapi sebaiknya jangan mengetik selama perekaman agar file log mudah diproses.
+
 ## Build firmware
 
 ### Kebutuhan software
@@ -344,12 +396,14 @@ Task flash mengubah ELF menjadi BIN terlebih dahulu, kemudian menjalankan `hid-f
 | Lokasi | Isi utama |
 |---|---|
 | `Core/Src/main.c` | Inisialisasi clock/peripheral, USB CDC awal, dan scheduler |
-| `Core/Src/freertos.c` | Pembuatan task input/kendali, hardware/display, sequencer reflow, dan console CDC |
+| `Core/Src/freertos.c` | Pembuatan task statis input/kendali, hardware/display, thermal sequencer, dan console CDC |
 | `Core/Src/cdc_console.c` | Ring buffer RX, task console, parser command, dan respons USB CDC |
-| `Core/Src/hardware_test.c` | State layar, tombol, pembacaan ADC, heater manual, kalibrasi, PID, dan UI reflow |
+| `Core/Src/hardware_test.c` | State layar, tombol, ADC, heater manual, kalibrasi, PID, serta UI reflow/karakterisasi |
+| `Core/Src/heater_characterization.c` | State machine karakterisasi, cutoff, perhitungan laju, overshoot, dan sampel CSV |
 | `Core/Src/reflow.c` | State machine dan task profil preheat, soaking, reflow, serta cooling |
 | `Core/Src/thermistor.c` | Model NTC, kalibrasi dua titik, validasi, dan penyimpanan flash |
 | `Core/Src/ssd1306.c` | Driver OLED SSD1306 |
+| `Core/Src/text_format.c` | Formatter teks ringan tanpa overhead `snprintf` |
 | `USB_DEVICE/App/usbd_cdc_if.c` | USB CDC serta mekanisme reset menuju HID bootloader |
 | `Core/Src/{adc,i2c,tim,usart,gpio}.c` | Konfigurasi peripheral hasil STM32CubeMX |
 | `STM32F103xx_FLASH.ld` | Layout RAM/flash aplikasi dan reservasi kalibrasi |

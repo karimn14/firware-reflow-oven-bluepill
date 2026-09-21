@@ -1,10 +1,12 @@
 #include "cdc_console.h"
 
-#include "cmsis_os.h"
+#include "FreeRTOS.h"
 #include "hardware_test.h"
+#include "heater_characterization.h"
+#include "task.h"
+#include "text_format.h"
 #include "usbd_cdc_if.h"
 
-#include <stdio.h>
 #include <string.h>
 
 #define CDC_RX_RING_SIZE       256U
@@ -35,7 +37,7 @@ static uint8_t console_read_byte(uint8_t *value)
 
 static uint8_t console_write(const char *text, uint16_t length)
 {
-  uint32_t started_at = osKernelGetTickCount();
+  uint32_t started_at = xTaskGetTickCount();
 
   if ((text == NULL) || (length == 0U))
   {
@@ -44,21 +46,21 @@ static uint8_t console_write(const char *text, uint16_t length)
 
   while (CDC_Transmit_FS((uint8_t *)(uintptr_t)text, length) != USBD_OK)
   {
-    if ((osKernelGetTickCount() - started_at) >= CDC_TX_TIMEOUT_MS)
+    if ((xTaskGetTickCount() - started_at) >= CDC_TX_TIMEOUT_MS)
     {
       return 0U;
     }
-    osDelay(CDC_TX_RETRY_DELAY_MS);
+    vTaskDelay(pdMS_TO_TICKS(CDC_TX_RETRY_DELAY_MS));
   }
 
   /* The USB stack retains the supplied buffer until transmission completes. */
   while (CDC_TransmitReady_FS() == 0U)
   {
-    if ((osKernelGetTickCount() - started_at) >= CDC_TX_TIMEOUT_MS)
+    if ((xTaskGetTickCount() - started_at) >= CDC_TX_TIMEOUT_MS)
     {
       return 0U;
     }
-    osDelay(CDC_TX_RETRY_DELAY_MS);
+    vTaskDelay(pdMS_TO_TICKS(CDC_TX_RETRY_DELAY_MS));
   }
   return 1U;
 }
@@ -93,6 +95,8 @@ static const char *screen_name(HardwareTestScreen screen)
       return "pid";
     case HARDWARE_TEST_SCREEN_REFLOW:
       return "reflow";
+    case HARDWARE_TEST_SCREEN_CHARACTERIZATION:
+      return "heater-characterization";
     default:
       return "unknown";
   }
@@ -101,7 +105,7 @@ static const char *screen_name(HardwareTestScreen screen)
 static void console_print_status(void)
 {
   HardwareTestStatus status;
-  char response[256];
+  char response[192];
   int16_t setpoint_magnitude;
 
   HardwareTest_GetStatus(&status);
@@ -113,7 +117,7 @@ static void console_print_status(void)
     int16_t temperature_magnitude = (status.temperature_tenths < 0)
                                     ? (int16_t)-status.temperature_tenths
                                     : status.temperature_tenths;
-    (void)snprintf(response, sizeof(response),
+    (void)TextFormat(response, sizeof(response),
         "screen=%s heater=%s duty=%u%% adc=%u temperature=%s%d.%dC "
         "resistance=%luohm calibrated=%s pid=%s setpoint=%s%d.%dC\r\n",
         screen_name(status.screen), status.heater_enabled ? "on" : "off",
@@ -128,7 +132,7 @@ static void console_print_status(void)
   }
   else
   {
-    (void)snprintf(response, sizeof(response),
+    (void)TextFormat(response, sizeof(response),
         "screen=%s heater=%s duty=%u%% adc=%u temperature=invalid "
         "calibrated=%s pid=%s setpoint=%s%d.%dC\r\n",
         screen_name(status.screen), status.heater_enabled ? "on" : "off",
@@ -139,6 +143,41 @@ static void console_print_status(void)
         setpoint_magnitude / 10, setpoint_magnitude % 10);
   }
   console_write_text(response);
+}
+
+static void console_print_characterization_log(
+    uint32_t *seen_session, uint32_t *seen_sequence)
+{
+  HeaterCharacterizationLogSample sample;
+  char response[160];
+
+  if ((terminal_connected == 0U)
+      || (HeaterCharacterization_GetLatestLog(&sample) == 0U)
+      || (sample.sequence == *seen_sequence
+          && sample.session == *seen_session))
+  {
+    return;
+  }
+
+  if (sample.session != *seen_session)
+  {
+    console_write_text(
+        "\r\ncharacterization_csv_begin\r\n"
+        "elapsed_ms,state,duty_pct,temp_tenths_c,"
+        "rate_milli_c_per_s,peak_tenths_c,overshoot_tenths_c,fault\r\n");
+    *seen_session = sample.session;
+  }
+
+  (void)TextFormat(
+      response, sizeof(response), "%lu,%s,%u,%d,%ld,%d,%d,%u\r\n",
+      (unsigned long)sample.elapsed_ms,
+      HeaterCharacterization_StateName(sample.state), sample.duty_percent,
+      sample.temperature_valid ? sample.temperature_tenths : -32768,
+      (long)sample.rate_milli_c_per_s,
+      sample.peak_temperature_tenths, sample.overshoot_tenths,
+      (unsigned int)sample.fault);
+  console_write_text(response);
+  *seen_sequence = sample.sequence;
 }
 
 static void console_execute(char *command)
@@ -226,6 +265,8 @@ void CDC_Console_Task(void *argument)
   uint16_t command_length = 0U;
   uint32_t seen_connection = 0U;
   uint32_t seen_dropped = 0U;
+  uint32_t seen_characterization_session = 0U;
+  uint32_t seen_characterization_sequence = 0U;
   uint8_t previous_was_cr = 0U;
 
   (void)argument;
@@ -238,6 +279,8 @@ void CDC_Console_Task(void *argument)
       seen_connection = connection_generation;
       command_length = 0U;
       previous_was_cr = 0U;
+      seen_characterization_session = 0U;
+      seen_characterization_sequence = 0U;
       console_print_welcome();
     }
 
@@ -290,6 +333,8 @@ void CDC_Console_Task(void *argument)
         }
       }
     }
-    osDelay(5U);
+    console_print_characterization_log(&seen_characterization_session,
+                                       &seen_characterization_sequence);
+    vTaskDelay(pdMS_TO_TICKS(5U));
   }
 }
