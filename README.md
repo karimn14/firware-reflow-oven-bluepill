@@ -9,6 +9,25 @@ Firmware eksperimental untuk pengujian hardware dan kendali suhu *hot plate* ber
 
 > [!NOTE]
 > Pastikan STM32 Blue Pill telah diinstal bootloader stm32-hid-bootloader dari Serasidis.
+> Sudah Terinstal STM32CubeClt (Toolchain + CMake + Ninja)
+
+#### Panduan Development
+- Install STM32CubeClt
+- Clone Project ini ke komputer Anda.
+- Clone repository [saufik-ramadhan/stm32-vscode-init](https://github.com/saufik-ramadhan/stm32-vscode-init) ke komputer Anda.
+- Buka terminal dan arahkan ke direktori `stm32-vscode-init`.
+- Jalankan `./init.sh` untuk menginstal dependensi dan konfigurasi awal berikan argumen `--editor Zed` atau `--editor VSCode` untuk IDE yang akan digunakan lalu berikan path ke project STM32 Blue Pill Anda, script ini akan mengkonfigurasi environment sesuai kebutuhan.
+- Untuk Windows
+```bash
+.\init.ps1 --editor zed --flash-method hid --hid-flash tools\hid-flash.exe --hid-port COM7 C:\path\to\project
+```
+- Untuk Linux
+```bash
+./init.sh --editor zed --flash-method hid --hid-flash tools/hid-flash --hid-port /dev/ttyUSB0 /path/to/project
+```
+- Buka project STM32 Blue Pill Anda di VS Code atau Zed.
+- Ctrl + Shift + P untuk membuka Command Palette dan menjalankan task configure (Release/Debug).
+- Lalu Jalankan task build dan flash.
 
 Konfigurasi development environment untuk **Visual Studio Code** atau **Zed** dapat dibuat menggunakan repository [saufik-ramadhan/stm32-vscode-init](https://github.com/saufik-ramadhan/stm32-vscode-init).
 
