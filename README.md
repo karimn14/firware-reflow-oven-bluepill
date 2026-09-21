@@ -135,7 +135,7 @@ Alur kalibrasi:
 5. Sesuaikan `REF`, lalu tekan A untuk mengambil titik P2.
 6. Tahan D minimal 1,5 detik untuk menyimpan dan masuk ke layar PID.
 
-Data yang lolos validasi disimpan pada halaman flash terakhir, `0x0800FC00–0x0800FFFF`. Firmware menghitung ulang nilai Beta dan resistansi nominal R25 dari dua titik tersebut. Kalibrasi yang belum lengkap tidak disimpan.
+Data yang lolos validasi disimpan pada halaman flash terakhir, `0x0801FC00–0x0801FFFF`. Firmware menghitung ulang nilai Beta dan resistansi nominal R25 dari dua titik tersebut. Kalibrasi yang belum lengkap tidak disimpan. Data valid dari layout lama pada `0x0800FC00` akan dimigrasikan otomatis satu kali ke alamat baru.
 
 ### 3. Mode kendali PID
 
@@ -169,8 +169,8 @@ Pembagian flash proyek:
 | Alamat | Ukuran | Isi |
 |---|---:|---|
 | `0x08000000–0x080007FF` | 2 KiB | STM32 HID Bootloader |
-| `0x08000800–0x0800FBFF` | 61 KiB | Firmware aplikasi |
-| `0x0800FC00–0x0800FFFF` | 1 KiB | Data kalibrasi thermistor |
+| `0x08000800–0x0801FBFF` | 125 KiB | Firmware aplikasi |
+| `0x0801FC00–0x0801FFFF` | 1 KiB | Data kalibrasi thermistor |
 
 ### Hasil pengujian kapasitas flash board
 
@@ -180,9 +180,9 @@ Board yang digunakan saat ini telah diuji langsung dan terbukti mempunyai **flas
 - Halaman uji `0x0801F800` berhasil dihapus, ditulis dengan marker, dan diverifikasi.
 - Halaman `0x0800F800` tidak berubah, sehingga area di atas 64 KiB bukan alias dari area bawah.
 - Isi kedua halaman dicadangkan sebelum pengujian dan berhasil dipulihkan byte-for-byte setelah pengujian.
-- Data kalibrasi pada `0x0800FC00` tetap utuh.
+- Data kalibrasi lama pada `0x0800FC00` tetap utuh selama pengujian.
 
-Walaupun hardware ini mempunyai 128 KiB, linker project masih sengaja membatasi aplikasi pada layout 64 KiB agar kompatibel dengan STM32F103C8T6 lain yang mungkin benar-benar hanya menyediakan 64 KiB. Area tambahan belum digunakan oleh firmware. Menggunakan seluruh 128 KiB memerlukan perubahan linker script dan pemindahan halaman kalibrasi, serta akan mengurangi portabilitas firmware ke board C8 lain.
+Linker project telah dikonfigurasi untuk menggunakan kapasitas fisik 128 KiB board ini. Karena konfigurasi tersebut melebihi kapasitas resmi sebagian STM32F103C8T6, firmware hasil build ini hanya boleh digunakan pada board yang telah dipastikan mempunyai flash fisik 128 KiB.
 
 Konfigurasi tersebut diterapkan di dua tempat:
 

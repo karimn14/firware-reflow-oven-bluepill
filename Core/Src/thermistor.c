@@ -12,9 +12,12 @@
 #define NTC_DEFAULT_BETA           3950.0f
 #define NTC_REFERENCE_KELVIN       298.15f
 
-/* STM32F103C8 has 1 KiB flash pages. The final page is reserved in the
- * linker script so calibration survives firmware restarts. */
-#define CALIBRATION_FLASH_ADDRESS  0x0800fc00UL
+/* The tested STM32F103C8 board has 128 KiB physical flash and 1 KiB pages.
+ * The final page is reserved in the linker script so calibration survives
+ * firmware updates. The legacy address supports one-time migration from the
+ * previous 64 KiB memory layout. */
+#define CALIBRATION_FLASH_ADDRESS         0x0801fc00UL
+#define LEGACY_CALIBRATION_FLASH_ADDRESS  0x0800fc00UL
 #define CALIBRATION_MAGIC          0x4e544343UL /* "NTCC" */
 #define CALIBRATION_VERSION        2UL
 
@@ -57,6 +60,13 @@ static uint32_t record_checksum(const CalibrationRecord *record)
     hash *= 16777619UL;
   }
   return hash;
+}
+
+static uint8_t record_is_valid(const CalibrationRecord *record)
+{
+  return ((record->magic == CALIBRATION_MAGIC)
+          && (record->version == CALIBRATION_VERSION)
+          && (record->checksum == record_checksum(record))) ? 1U : 0U;
 }
 
 static uint8_t rebuild_model(void)
@@ -118,6 +128,7 @@ void Thermistor_Init(void)
 {
   const CalibrationRecord *record =
       (const CalibrationRecord *)CALIBRATION_FLASH_ADDRESS;
+  uint8_t migrate_legacy_record = 0U;
 
   model_beta = NTC_DEFAULT_BETA;
   model_r25 = NTC_DEFAULT_R25_OHM;
@@ -126,11 +137,14 @@ void Thermistor_Init(void)
   points[0].valid = 0U;
   points[1].valid = 0U;
 
-  if ((record->magic != CALIBRATION_MAGIC)
-      || (record->version != CALIBRATION_VERSION)
-      || (record->checksum != record_checksum(record)))
+  if (record_is_valid(record) == 0U)
   {
-    return;
+    record = (const CalibrationRecord *)LEGACY_CALIBRATION_FLASH_ADDRESS;
+    if (record_is_valid(record) == 0U)
+    {
+      return;
+    }
+    migrate_legacy_record = 1U;
   }
 
   points[0].adc = (uint16_t)record->point_1_adc;
@@ -144,6 +158,10 @@ void Thermistor_Init(void)
   {
     points[0].valid = 0U;
     points[1].valid = 0U;
+  }
+  else if (migrate_legacy_record != 0U)
+  {
+    (void)Thermistor_SaveCalibration();
   }
 }
 

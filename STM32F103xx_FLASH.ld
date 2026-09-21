@@ -6,8 +6,8 @@
 **
 **  Author		: STM32CubeMX
 **
-**  Abstract    : Linker script for STM32F103C8Tx series
-**                64Kbytes FLASH and 20Kbytes RAM
+**  Abstract    : Linker script for the tested STM32F103C8Tx board
+**                with 128Kbytes physical FLASH and 20Kbytes RAM
 **
 **                Set heap size, stack size and stack location according
 **                to application requirements.
@@ -56,8 +56,9 @@ ENTRY(Reset_Handler)
 MEMORY
 {
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 20K
-/* Final 1 KiB page (0x0800FC00) is reserved for NTC calibration data. */
-FLASH (rx)      : ORIGIN = 0x08000800, LENGTH = 61K
+/* First 2 KiB are reserved for the HID bootloader. The final 1 KiB page
+ * (0x0801FC00) is reserved for NTC calibration data. */
+FLASH (rx)      : ORIGIN = 0x08000800, LENGTH = 125K
 }
 
 /* Highest address of the user mode stack */
