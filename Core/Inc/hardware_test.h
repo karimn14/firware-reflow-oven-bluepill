@@ -5,9 +5,34 @@
 extern "C" {
 #endif
 
+#include <stdint.h>
+
+typedef enum
+{
+  HARDWARE_TEST_SCREEN_HEATER = 0,
+  HARDWARE_TEST_SCREEN_CALIBRATION,
+  HARDWARE_TEST_SCREEN_PID
+} HardwareTestScreen;
+
+typedef struct
+{
+  HardwareTestScreen screen;
+  uint16_t adc;
+  int16_t temperature_tenths;
+  uint32_t resistance_ohm;
+  int16_t pid_setpoint_tenths;
+  uint8_t temperature_valid;
+  uint8_t thermistor_calibrated;
+  uint8_t heater_enabled;
+  uint8_t heater_duty_percent;
+  uint8_t pid_running;
+  uint8_t pid_fault;
+} HardwareTestStatus;
+
 void HardwareTest_Init(void);
 void HardwareTest_InputRun(void);
 void HardwareTest_Run(void);
+void HardwareTest_GetStatus(HardwareTestStatus *status);
 
 #ifdef __cplusplus
 }

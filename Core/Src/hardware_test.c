@@ -850,3 +850,23 @@ void HardwareTest_Run(void)
                  ? 1U : 0U;
   }
 }
+
+void HardwareTest_GetStatus(HardwareTestStatus *status)
+{
+  if (status == NULL)
+  {
+    return;
+  }
+
+  status->screen = (HardwareTestScreen)current_screen;
+  status->adc = latest_adc;
+  status->temperature_tenths = latest_temperature_tenths;
+  status->resistance_ohm = latest_resistance_ohm;
+  status->pid_setpoint_tenths = pid_setpoint_tenths;
+  status->temperature_valid = latest_temperature_valid;
+  status->thermistor_calibrated = Thermistor_IsCalibrated();
+  status->heater_enabled = heater_enabled;
+  status->heater_duty_percent = heater_duty_percent;
+  status->pid_running = pid_running;
+  status->pid_fault = pid_fault;
+}

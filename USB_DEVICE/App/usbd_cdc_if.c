@@ -22,6 +22,7 @@
 #include "usbd_cdc_if.h"
 
 /* USER CODE BEGIN INCLUDE */
+#include "cdc_console.h"
 
 /* USER CODE END INCLUDE */
 
@@ -178,6 +179,7 @@ static int8_t CDC_Init_FS(void)
 static int8_t CDC_DeInit_FS(void)
 {
   /* USER CODE BEGIN 4 */
+  CDC_Console_OnControlLineState(0U);
   return (USBD_OK);
   /* USER CODE END 4 */
 }
@@ -246,6 +248,9 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
         hid_bootloader_dtr_events++;
       }
       /* STM32_INIT_HID_CDC_DTR_END */
+      CDC_Console_OnControlLineState(
+          ((((USBD_SetupReqTypedef *)(void *)pbuf)->wValue & 0x0001U) != 0U)
+          ? 1U : 0U);
 
     break;
 
@@ -299,6 +304,7 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
     }
   }
   /* STM32_INIT_HID_CDC_MAGIC_END */
+  CDC_Console_OnReceive(Buf, *Len);
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceFS);
   return (USBD_OK);
@@ -321,6 +327,9 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 7 */
   USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
+  if (hcdc == NULL){
+    return USBD_FAIL;
+  }
   if (hcdc->TxState != 0){
     return USBD_BUSY;
   }
@@ -331,6 +340,13 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
+
+uint8_t CDC_TransmitReady_FS(void)
+{
+  USBD_CDC_HandleTypeDef *hcdc =
+      (USBD_CDC_HandleTypeDef *)hUsbDeviceFS.pClassData;
+  return ((hcdc != NULL) && (hcdc->TxState == 0U)) ? 1U : 0U;
+}
 
 /* STM32_INIT_HID_CDC_RESET_BEGIN */
 static void HID_Bootloader_Reset(void)

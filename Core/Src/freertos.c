@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "hardware_test.h"
+#include "cdc_console.h"
 
 /* USER CODE END Includes */
 
@@ -52,6 +53,17 @@ const osThreadAttr_t inputTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
+static StaticTask_t cdcTaskControlBlock;
+static StackType_t cdcTaskStack[256];
+osThreadId_t cdcTaskHandle;
+const osThreadAttr_t cdcTask_attributes = {
+  .name = "cdcTask",
+  .cb_mem = &cdcTaskControlBlock,
+  .cb_size = sizeof(cdcTaskControlBlock),
+  .stack_mem = cdcTaskStack,
+  .stack_size = sizeof(cdcTaskStack),
+  .priority = (osPriority_t) osPriorityLow,
+};
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -65,6 +77,7 @@ const osThreadAttr_t defaultTask_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 void StartInputTask(void *argument);
+void StartCdcTask(void *argument);
 
 /* USER CODE END FunctionPrototypes */
 
@@ -105,6 +118,7 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   inputTaskHandle = osThreadNew(StartInputTask, NULL, &inputTask_attributes);
+  cdcTaskHandle = osThreadNew(StartCdcTask, NULL, &cdcTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -147,6 +161,11 @@ void StartInputTask(void *argument)
     HardwareTest_InputRun();
     osDelay(10);
   }
+}
+
+void StartCdcTask(void *argument)
+{
+  CDC_Console_Task(argument);
 }
 
 /* USER CODE END Application */
