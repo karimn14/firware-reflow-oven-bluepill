@@ -49,6 +49,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/cdc_console.c
     Core/Src/hardware_test.c
+    Core/Src/reflow.c
     Core/Src/ssd1306.c
     Core/Src/thermistor.c
 )

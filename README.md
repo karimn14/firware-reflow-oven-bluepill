@@ -39,13 +39,15 @@ Tool tersebut dapat digunakan untuk membantu menyiapkan integrasi project STM32 
 - Pembacaan ADC thermistor dengan rata-rata 32 sampel; sampel minimum dan maksimum dibuang.
 - Kalibrasi thermistor dua titik dan penyimpanan hasil kalibrasi di flash.
 - Kendali suhu PID dengan *setpoint ramp*, filter derivatif, pembatas integral, dan pembatas daya ketika mendekati target.
+- Profil PCB reflow POC otomatis dengan tahap preheat, soaking, reflow, dan cooling; target puncak dibatasi 120 °C.
+- Halaman OLED reflow dengan status tahap, target, output heater, waktu proses, dan grafik suhu bergulir.
 - Proteksi heater ketika sensor tidak valid atau suhu mencapai 150 °C.
 - Antarmuka OLED 128×64 berbasis SSD1306 melalui I2C 400 kHz.
 - Empat tombol aktif-low dengan pull-up internal, debounce, dan auto-repeat.
 - USB Full Speed sebagai Virtual COM Port (CDC).
 - Console interaktif USB CDC untuk PuTTY, `screen`, atau serial monitor lain.
 - Masuk ke HID bootloader melalui reset yang dipicu oleh utilitas flashing pada port USB CDC.
-- FreeRTOS dengan task terpisah untuk pembacaan input/kendali, pembaruan sensor/display, dan console USB CDC.
+- FreeRTOS dengan task terpisah untuk pembacaan input/kendali, pembaruan sensor/display, sequencer reflow, dan console USB CDC.
 
 ## Hardware
 
@@ -144,7 +146,7 @@ Data yang lolos validasi disimpan pada halaman flash terakhir, `0x0801FC00–0x0
 | A | Menjalankan/menghentikan PID |
 | B | Menaikkan setpoint 0,5 °C; tahan untuk auto-repeat |
 | C | Menurunkan setpoint 0,5 °C; tahan untuk auto-repeat |
-| D | Mematikan PID dan kembali ke mode pengujian heater |
+| D | Mematikan PID dan membuka halaman PCB reflow |
 
 Setpoint awal adalah 70 °C dan dapat diatur pada rentang 20–140 °C. PID hanya dapat dijalankan jika thermistor sudah dikalibrasi dan pembacaan sensor valid. Konfigurasi kontrol saat ini:
 
@@ -159,6 +161,39 @@ Setpoint awal adalah 70 °C dan dapat diatur pada rentang 20–140 °C. PID hany
 | Batas keselamatan | heater off pada ≥150 °C |
 
 Nilai tersebut masih bersifat parameter awal untuk plant hot plate dan perlu divalidasi/tuning pada hardware sebenarnya.
+
+### 4. Mode PCB reflow POC
+
+Tekan D dari halaman PID untuk membuka halaman reflow. Task `reflowTask` menjalankan urutan tahap secara terpisah dari task input dan display, sedangkan pengaturan daya heater tetap menggunakan pengendali PID yang sama.
+
+Profil bawaan sengaja diturunkan untuk demonstrasi dengan target puncak maksimum 120 °C:
+
+| Tahap | Target bawaan | Durasi/kondisi selesai |
+|---|---:|---|
+| Idle | Heater mati | Menunggu tombol A |
+| Preheat | 60 °C | 90 detik |
+| Soaking | 90 °C | 75 detik |
+| Reflow | 120 °C | 75 detik |
+| Cooling | Heater mati | Hingga suhu ≤50 °C |
+
+Durasi setiap tahap pemanasan masih tetap di dalam firmware. Target suhu dapat diatur ketika status **IDLE**:
+
+| Tombol | Fungsi pada halaman reflow |
+|---|---|
+| A | Menjalankan profil; saat proses aktif, menghentikan profil dan mematikan heater |
+| B | Menaikkan target tahap terpilih 1 °C; tahan untuk auto-repeat |
+| C | Menurunkan target tahap terpilih 1 °C; tahan untuk auto-repeat |
+| D singkat | Memilih target Preheat (`P`), Soaking (`S`), atau Reflow (`R`) |
+| D ditahan ≥1,5 detik | Menghentikan profil, mematikan heater, dan kembali ke layar pengujian heater |
+
+Firmware menjaga urutan target `Preheat < Soaking < Reflow` dengan selisih minimum 5 °C. Target preheat tidak dapat diturunkan di bawah 40 °C dan target puncak reflow tidak dapat dinaikkan di atas 120 °C. Perubahan target dikunci selama profil berjalan. Pengaturan profil belum disimpan ke flash dan kembali ke nilai bawaan setelah reset.
+
+OLED menampilkan tahap aktif (`IDLE`, `PREHEAT`, `SOAKING`, `REFLOW`, atau `COOLING`), suhu aktual, waktu total, ketiga target, output heater, dan target tahap aktif. Grafik menyimpan 128 sampel dengan interval 2 detik, sehingga menampilkan sekitar 256 detik riwayat suhu; garis titik-titik menunjukkan target aktif. Skala grafik adalah 20–120 °C.
+
+Profil hanya dapat dimulai jika thermistor sudah dikalibrasi dan pembacaannya valid. Selama tahap pemanasan, suhu aktual ≥125 °C atau fault PID langsung mematikan heater dan memindahkan state ke cooling dengan indikator fault `!`. Kehilangan pembacaan sensor mematikan profil. Cooling saat ini bersifat pasif karena output fan belum digunakan.
+
+> [!WARNING]
+> Profil 120 °C ini hanya untuk proof-of-concept dan tidak cukup untuk proses solder reflow produksi. Batas 120 °C adalah batas **target**; inersia termal masih dapat menyebabkan overshoot, sehingga firmware menggunakan cutoff tambahan pada 125 °C. Tetap gunakan pengaman termal independen dan pengawasan operator.
 
 ## STM32 HID bootloader
 
@@ -309,9 +344,10 @@ Task flash mengubah ELF menjadi BIN terlebih dahulu, kemudian menjalankan `hid-f
 | Lokasi | Isi utama |
 |---|---|
 | `Core/Src/main.c` | Inisialisasi clock/peripheral, USB CDC awal, dan scheduler |
-| `Core/Src/freertos.c` | Pembuatan task input/kendali, hardware/display, dan console CDC |
+| `Core/Src/freertos.c` | Pembuatan task input/kendali, hardware/display, sequencer reflow, dan console CDC |
 | `Core/Src/cdc_console.c` | Ring buffer RX, task console, parser command, dan respons USB CDC |
-| `Core/Src/hardware_test.c` | State layar, tombol, pembacaan ADC, heater manual, kalibrasi, dan PID |
+| `Core/Src/hardware_test.c` | State layar, tombol, pembacaan ADC, heater manual, kalibrasi, PID, dan UI reflow |
+| `Core/Src/reflow.c` | State machine dan task profil preheat, soaking, reflow, serta cooling |
 | `Core/Src/thermistor.c` | Model NTC, kalibrasi dua titik, validasi, dan penyimpanan flash |
 | `Core/Src/ssd1306.c` | Driver OLED SSD1306 |
 | `USB_DEVICE/App/usbd_cdc_if.c` | USB CDC serta mekanisme reset menuju HID bootloader |

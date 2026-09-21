@@ -4,10 +4,12 @@
 #include "gpio.h"
 #include "i2c.h"
 #include "main.h"
+#include "reflow.h"
 #include "ssd1306.h"
 #include "thermistor.h"
 #include "tim.h"
 
+#include <limits.h>
 #include <stdio.h>
 
 #define OLED_ADDRESS_7BIT       0x3cU
@@ -34,6 +36,9 @@
 #define PID_KD                      15.0f
 #define PID_SETPOINT_RAMP_C_PER_S   0.5f
 #define PID_DERIVATIVE_FILTER_S     1.0f
+#define REFLOW_EXIT_HOLD_MS         1500U
+#define REFLOW_REPEAT_RATE_MS        100U
+#define REFLOW_TEMPERATURE_STEP_TENTHS 10
 
 typedef struct
 {
@@ -51,7 +56,8 @@ typedef enum
 {
   SCREEN_HEATER = 0,
   SCREEN_THERMISTOR_CALIBRATION,
-  SCREEN_PID
+  SCREEN_PID,
+  SCREEN_REFLOW
 } Screen;
 
 static SSD1306_HandleTypeDef oled;
@@ -87,6 +93,10 @@ static float pid_output_percent;
 static float pid_p_term;
 static float pid_i_term;
 static float pid_d_term;
+static uint8_t reflow_d_armed;
+static uint8_t reflow_d_press_active;
+static uint8_t reflow_d_long_handled;
+static uint32_t reflow_d_pressed_at;
 
 static void adjust_pid_setpoint(int16_t change_tenths);
 
@@ -147,7 +157,8 @@ static void update_button_auto_repeat(void)
   uint32_t now;
 
   if ((current_screen != SCREEN_THERMISTOR_CALIBRATION)
-      && (current_screen != SCREEN_PID))
+      && (current_screen != SCREEN_PID)
+      && (current_screen != SCREEN_REFLOW))
   {
     return;
   }
@@ -155,9 +166,11 @@ static void update_button_auto_repeat(void)
   now = HAL_GetTick();
   for (uint8_t i = 1U; i <= 2U; ++i)
   {
-    uint32_t repeat_rate = (current_screen == SCREEN_PID)
-                           ? PID_REPEAT_RATE_MS
-                           : REFERENCE_REPEAT_RATE_MS;
+    uint32_t repeat_rate = (current_screen == SCREEN_THERMISTOR_CALIBRATION)
+                           ? REFERENCE_REPEAT_RATE_MS
+                           : ((current_screen == SCREEN_REFLOW)
+                              ? REFLOW_REPEAT_RATE_MS
+                              : PID_REPEAT_RATE_MS);
     if ((buttons[i].stable_pressed != 0U)
         && ((now - buttons[i].pressed_at) >= REFERENCE_REPEAT_DELAY_MS)
         && ((now - buttons[i].last_repeat_at) >= repeat_rate))
@@ -166,6 +179,12 @@ static void update_button_auto_repeat(void)
       {
         adjust_pid_setpoint((i == 1U) ? PID_SETPOINT_STEP_TENTHS
                                      : -PID_SETPOINT_STEP_TENTHS);
+      }
+      else if (current_screen == SCREEN_REFLOW)
+      {
+        Reflow_AdjustSelectedTemperature(
+            (i == 1U) ? REFLOW_TEMPERATURE_STEP_TENTHS
+                      : -REFLOW_TEMPERATURE_STEP_TENTHS);
       }
       else
       {
@@ -468,6 +487,69 @@ static void update_calibration_heater_button(void)
   }
 }
 
+static void enter_reflow_screen(void)
+{
+  pid_stop(0U);
+  current_screen = SCREEN_REFLOW;
+  reflow_d_armed = 0U;
+  reflow_d_press_active = 0U;
+  reflow_d_long_handled = 0U;
+}
+
+static void leave_reflow_screen(void)
+{
+  Reflow_RequestStop();
+  pid_stop(0U);
+  heater_duty_percent = heater_manual_duty_percent;
+  current_screen = SCREEN_HEATER;
+}
+
+static void update_reflow_navigation_button(void)
+{
+  uint8_t pressed;
+
+  if (current_screen != SCREEN_REFLOW)
+  {
+    return;
+  }
+
+  pressed = buttons[3].stable_pressed;
+  if (reflow_d_armed == 0U)
+  {
+    if (pressed == 0U)
+    {
+      reflow_d_armed = 1U;
+    }
+    return;
+  }
+
+  if (pressed != 0U)
+  {
+    if (reflow_d_press_active == 0U)
+    {
+      reflow_d_press_active = 1U;
+      reflow_d_long_handled = 0U;
+      reflow_d_pressed_at = HAL_GetTick();
+    }
+    else if ((reflow_d_long_handled == 0U)
+             && ((HAL_GetTick() - reflow_d_pressed_at)
+                 >= REFLOW_EXIT_HOLD_MS))
+    {
+      reflow_d_long_handled = 1U;
+      leave_reflow_screen();
+    }
+  }
+  else if (reflow_d_press_active != 0U)
+  {
+    if (reflow_d_long_handled == 0U)
+    {
+      Reflow_SelectNextProfile();
+    }
+    reflow_d_press_active = 0U;
+    reflow_d_long_handled = 0U;
+  }
+}
+
 static void update_controls(void)
 {
   for (uint8_t i = 0U; i < 4U; ++i)
@@ -542,7 +624,7 @@ static void update_controls(void)
           break;
       }
     }
-    else
+    else if (current_screen == SCREEN_PID)
     {
       switch (i)
       {
@@ -563,9 +645,36 @@ static void update_controls(void)
           adjust_pid_setpoint(-PID_SETPOINT_STEP_TENTHS);
           break;
         case 3U:
-          pid_stop(0U);
-          heater_duty_percent = heater_manual_duty_percent;
-          current_screen = SCREEN_HEATER;
+          enter_reflow_screen();
+          break;
+        default:
+          break;
+      }
+    }
+    else
+    {
+      switch (i)
+      {
+        case 0U:
+          if (Reflow_IsRunning() != 0U)
+          {
+            Reflow_RequestStop();
+          }
+          else
+          {
+            Reflow_RequestStart();
+          }
+          break;
+        case 1U:
+          Reflow_AdjustSelectedTemperature(
+              REFLOW_TEMPERATURE_STEP_TENTHS);
+          break;
+        case 2U:
+          Reflow_AdjustSelectedTemperature(
+              -REFLOW_TEMPERATURE_STEP_TENTHS);
+          break;
+        case 3U:
+          /* Short/long actions are resolved on release/time. */
           break;
         default:
           break;
@@ -750,6 +859,142 @@ static void draw_pid_screen(void)
   SSD1306_DrawString(&oled, 0U, 7U, "D:OFF/BACK");
 }
 
+static const char *reflow_state_name(ReflowState state)
+{
+  switch (state)
+  {
+    case REFLOW_STATE_PREHEAT:
+      return "PREHEAT";
+    case REFLOW_STATE_SOAKING:
+      return "SOAKING";
+    case REFLOW_STATE_REFLOW:
+      return "REFLOW";
+    case REFLOW_STATE_COOLING:
+      return "COOLING";
+    case REFLOW_STATE_IDLE:
+    default:
+      return "IDLE";
+  }
+}
+
+static uint8_t reflow_graph_y(int16_t temperature_tenths)
+{
+  int32_t clamped = temperature_tenths;
+
+  if (clamped < 200)
+  {
+    clamped = 200;
+  }
+  else if (clamped > 1200)
+  {
+    clamped = 1200;
+  }
+  return (uint8_t)(47 - (((clamped - 200) * 31) / 1000));
+}
+
+static void draw_reflow_screen(void)
+{
+  ReflowStatus status;
+  char line[22];
+  char temperature[10] = "--.-";
+  char selected_name;
+  int16_t target;
+  uint8_t preheat_degrees;
+  uint8_t soaking_degrees;
+  uint8_t reflow_degrees;
+  uint8_t previous_valid = 0U;
+  uint8_t previous_x = 0U;
+  uint8_t previous_y = 0U;
+
+  Reflow_GetStatus(&status);
+  if (latest_temperature_valid != 0U)
+  {
+    format_temperature(temperature, sizeof(temperature),
+                       latest_temperature_tenths);
+  }
+
+  (void)snprintf(line, sizeof(line), "%s %sC %lus",
+                 reflow_state_name(status.state), temperature,
+                 (unsigned long)status.elapsed_seconds);
+  SSD1306_DrawString(&oled, 0U, 0U, line);
+
+  selected_name = (status.selected == REFLOW_PROFILE_PREHEAT) ? 'P'
+                  : ((status.selected == REFLOW_PROFILE_SOAKING) ? 'S' : 'R');
+  preheat_degrees = (uint8_t)(status.preheat_tenths / 10);
+  soaking_degrees = (uint8_t)(status.soaking_tenths / 10);
+  reflow_degrees = (uint8_t)(status.reflow_tenths / 10);
+  (void)snprintf(line, sizeof(line), "P%03u S%03u R%03u >%c",
+                 preheat_degrees, soaking_degrees, reflow_degrees,
+                 selected_name);
+  SSD1306_DrawString(&oled, 0U, 1U, line);
+
+  if (status.state == REFLOW_STATE_PREHEAT)
+  {
+    target = status.preheat_tenths;
+  }
+  else if (status.state == REFLOW_STATE_SOAKING)
+  {
+    target = status.soaking_tenths;
+  }
+  else if (status.state == REFLOW_STATE_REFLOW)
+  {
+    target = status.reflow_tenths;
+  }
+  else if (status.selected == REFLOW_PROFILE_PREHEAT)
+  {
+    target = status.preheat_tenths;
+  }
+  else if (status.selected == REFLOW_PROFILE_SOAKING)
+  {
+    target = status.soaking_tenths;
+  }
+  else
+  {
+    target = status.reflow_tenths;
+  }
+
+  if (status.state != REFLOW_STATE_COOLING)
+  {
+    uint8_t target_y = reflow_graph_y(target);
+    for (uint8_t x = 0U; x < SSD1306_WIDTH; x += 4U)
+    {
+      SSD1306_DrawPixel(&oled, x, target_y, 1U);
+    }
+  }
+
+  for (uint8_t i = 0U; i < status.graph_count; ++i)
+  {
+    int16_t sample = status.graph_temperature_tenths[i];
+    if (sample == INT16_MIN)
+    {
+      previous_valid = 0U;
+      continue;
+    }
+
+    uint8_t y = reflow_graph_y(sample);
+    if (previous_valid != 0U)
+    {
+      SSD1306_DrawLine(&oled, previous_x, previous_y, i, y);
+    }
+    else
+    {
+      SSD1306_DrawPixel(&oled, i, y, 1U);
+    }
+    previous_valid = 1U;
+    previous_x = i;
+    previous_y = y;
+  }
+
+  (void)snprintf(line, sizeof(line), "%sOUT:%3u%% TGT:%3dC",
+                 status.fault ? "!" : " ", heater_duty_percent,
+                 target / 10);
+  SSD1306_DrawString(&oled, 0U, 6U, line);
+  SSD1306_DrawString(&oled, 0U, 7U,
+                     (status.state == REFLOW_STATE_IDLE)
+                     ? "A:RUN B:+ C:- D:SEL"
+                     : "A:STOP D-HOLD:BACK");
+}
+
 void HardwareTest_Init(void)
 {
   hardware_initialized = 0U;
@@ -788,6 +1033,7 @@ void HardwareTest_InputRun(void)
   }
   update_controls();
   update_calibration_heater_button();
+  update_reflow_navigation_button();
   update_button_auto_repeat();
   update_pid_controller();
 }
@@ -833,9 +1079,13 @@ void HardwareTest_Run(void)
     {
       draw_calibration_screen();
     }
-    else
+    else if (current_screen == SCREEN_PID)
     {
       draw_pid_screen();
+    }
+    else
+    {
+      draw_reflow_screen();
     }
 
     if (SSD1306_Update(&oled) != HAL_OK)
@@ -869,4 +1119,28 @@ void HardwareTest_GetStatus(HardwareTestStatus *status)
   status->heater_duty_percent = heater_duty_percent;
   status->pid_running = pid_running;
   status->pid_fault = pid_fault;
+}
+
+uint8_t HardwareTest_PIDStartAt(int16_t setpoint_tenths)
+{
+  HardwareTest_PIDSetSetpoint(setpoint_tenths);
+  return pid_start();
+}
+
+void HardwareTest_PIDSetSetpoint(int16_t setpoint_tenths)
+{
+  if (setpoint_tenths < PID_SETPOINT_MIN_TENTHS)
+  {
+    setpoint_tenths = PID_SETPOINT_MIN_TENTHS;
+  }
+  else if (setpoint_tenths > PID_SETPOINT_MAX_TENTHS)
+  {
+    setpoint_tenths = PID_SETPOINT_MAX_TENTHS;
+  }
+  pid_setpoint_tenths = setpoint_tenths;
+}
+
+void HardwareTest_PIDStop(void)
+{
+  pid_stop(0U);
 }

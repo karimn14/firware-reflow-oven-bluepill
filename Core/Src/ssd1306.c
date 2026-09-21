@@ -118,6 +118,66 @@ void SSD1306_DrawString(SSD1306_HandleTypeDef *display,
   }
 }
 
+void SSD1306_DrawPixel(SSD1306_HandleTypeDef *display,
+                      uint8_t x,
+                      uint8_t y,
+                      uint8_t on)
+{
+  uint16_t index;
+  uint8_t mask;
+
+  if ((display == NULL) || (x >= SSD1306_WIDTH) || (y >= SSD1306_HEIGHT))
+  {
+    return;
+  }
+
+  index = (uint16_t)(y / 8U) * SSD1306_WIDTH + x;
+  mask = (uint8_t)(1U << (y % 8U));
+  if (on != 0U)
+  {
+    display->buffer[index] |= mask;
+  }
+  else
+  {
+    display->buffer[index] &= (uint8_t)~mask;
+  }
+}
+
+void SSD1306_DrawLine(SSD1306_HandleTypeDef *display,
+                     uint8_t x0,
+                     uint8_t y0,
+                     uint8_t x1,
+                     uint8_t y1)
+{
+  int16_t x = x0;
+  int16_t y = y0;
+  int16_t dx = (x1 >= x0) ? (int16_t)(x1 - x0) : (int16_t)(x0 - x1);
+  int16_t sx = (x0 < x1) ? 1 : -1;
+  int16_t dy = (y1 >= y0) ? -(int16_t)(y1 - y0)
+                          : -(int16_t)(y0 - y1);
+  int16_t sy = (y0 < y1) ? 1 : -1;
+  int16_t error = dx + dy;
+
+  for (;;)
+  {
+    SSD1306_DrawPixel(display, (uint8_t)x, (uint8_t)y, 1U);
+    if ((x == x1) && (y == y1))
+    {
+      break;
+    }
+    if ((2 * error) >= dy)
+    {
+      error += dy;
+      x += sx;
+    }
+    if ((2 * error) <= dx)
+    {
+      error += dx;
+      y += sy;
+    }
+  }
+}
+
 HAL_StatusTypeDef SSD1306_Update(SSD1306_HandleTypeDef *display)
 {
   for (uint8_t page = 0U; page < 8U; ++page)

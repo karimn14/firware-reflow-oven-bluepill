@@ -11,7 +11,8 @@ typedef enum
 {
   HARDWARE_TEST_SCREEN_HEATER = 0,
   HARDWARE_TEST_SCREEN_CALIBRATION,
-  HARDWARE_TEST_SCREEN_PID
+  HARDWARE_TEST_SCREEN_PID,
+  HARDWARE_TEST_SCREEN_REFLOW
 } HardwareTestScreen;
 
 typedef struct
@@ -33,6 +34,9 @@ void HardwareTest_Init(void);
 void HardwareTest_InputRun(void);
 void HardwareTest_Run(void);
 void HardwareTest_GetStatus(HardwareTestStatus *status);
+uint8_t HardwareTest_PIDStartAt(int16_t setpoint_tenths);
+void HardwareTest_PIDSetSetpoint(int16_t setpoint_tenths);
+void HardwareTest_PIDStop(void);
 
 #ifdef __cplusplus
 }

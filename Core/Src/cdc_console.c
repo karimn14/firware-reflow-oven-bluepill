@@ -91,6 +91,8 @@ static const char *screen_name(HardwareTestScreen screen)
       return "calibration";
     case HARDWARE_TEST_SCREEN_PID:
       return "pid";
+    case HARDWARE_TEST_SCREEN_REFLOW:
+      return "reflow";
     default:
       return "unknown";
   }

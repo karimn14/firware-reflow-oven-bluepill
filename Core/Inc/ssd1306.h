@@ -26,6 +26,15 @@ void SSD1306_DrawString(SSD1306_HandleTypeDef *display,
                        uint8_t x,
                        uint8_t row,
                        const char *text);
+void SSD1306_DrawPixel(SSD1306_HandleTypeDef *display,
+                      uint8_t x,
+                      uint8_t y,
+                      uint8_t on);
+void SSD1306_DrawLine(SSD1306_HandleTypeDef *display,
+                     uint8_t x0,
+                     uint8_t y0,
+                     uint8_t x1,
+                     uint8_t y1);
 HAL_StatusTypeDef SSD1306_Update(SSD1306_HandleTypeDef *display);
 
 #ifdef __cplusplus

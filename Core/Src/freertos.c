@@ -27,6 +27,7 @@
 /* USER CODE BEGIN Includes */
 #include "hardware_test.h"
 #include "cdc_console.h"
+#include "reflow.h"
 
 /* USER CODE END Includes */
 
@@ -64,6 +65,17 @@ const osThreadAttr_t cdcTask_attributes = {
   .stack_size = sizeof(cdcTaskStack),
   .priority = (osPriority_t) osPriorityLow,
 };
+static StaticTask_t reflowTaskControlBlock;
+static StackType_t reflowTaskStack[128];
+osThreadId_t reflowTaskHandle;
+const osThreadAttr_t reflowTask_attributes = {
+  .name = "reflowTask",
+  .cb_mem = &reflowTaskControlBlock,
+  .cb_size = sizeof(reflowTaskControlBlock),
+  .stack_mem = reflowTaskStack,
+  .stack_size = sizeof(reflowTaskStack),
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -78,6 +90,7 @@ const osThreadAttr_t defaultTask_attributes = {
 /* USER CODE BEGIN FunctionPrototypes */
 void StartInputTask(void *argument);
 void StartCdcTask(void *argument);
+void StartReflowTask(void *argument);
 
 /* USER CODE END FunctionPrototypes */
 
@@ -93,6 +106,7 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
+  Reflow_Init();
 
   /* USER CODE END Init */
 
@@ -119,6 +133,8 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_THREADS */
   inputTaskHandle = osThreadNew(StartInputTask, NULL, &inputTask_attributes);
   cdcTaskHandle = osThreadNew(StartCdcTask, NULL, &cdcTask_attributes);
+  reflowTaskHandle = osThreadNew(StartReflowTask, NULL,
+                                 &reflowTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -166,6 +182,11 @@ void StartInputTask(void *argument)
 void StartCdcTask(void *argument)
 {
   CDC_Console_Task(argument);
+}
+
+void StartReflowTask(void *argument)
+{
+  Reflow_Task(argument);
 }
 
 /* USER CODE END Application */
