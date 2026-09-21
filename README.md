@@ -5,6 +5,15 @@ Firmware eksperimental untuk pengujian hardware dan kendali suhu *hot plate* ber
 > [!IMPORTANT]
 > Firmware ini dibuat untuk berjalan bersama [Serasidis STM32 HID Bootloader](https://github.com/Serasidis/STM32_HID_Bootloader). Aplikasi **bukan** ditempatkan di awal flash: vector table aplikasi dimulai di `0x08000800`, setelah area bootloader 2 KiB.
 
+### Inisialisasi project untuk VS Code atau Zed
+
+> [!NOTE]
+> Pastikan STM32 Blue Pill telah diinstal bootloader stm32-hid-bootloader dari Serasidis.
+
+Konfigurasi development environment untuk **Visual Studio Code** atau **Zed** dapat dibuat menggunakan repository [saufik-ramadhan/stm32-vscode-init](https://github.com/saufik-ramadhan/stm32-vscode-init).
+
+Tool tersebut dapat digunakan untuk membantu menyiapkan integrasi project STM32 berbasis CMake, termasuk task build, flash, dan debug editor. Project ini sudah memiliki konfigurasi Zed pada direktori `.zed/`, termasuk task build dan flash melalui STM32 HID Bootloader. Ikuti petunjuk instalasi dan penggunaan terbaru pada README repository `stm32-vscode-init` apabila konfigurasi perlu dibuat ulang atau project dibuka pada komputer lain.
+
 ## Fitur saat ini
 
 - Pengujian manual SSR/heater dengan duty cycle 25%, 50%, 75%, atau 100%.
@@ -223,12 +232,6 @@ Data USB diterima oleh callback CDC dan dimasukkan ke ring buffer 256 byte. Task
 - GNU Arm Embedded Toolchain (`arm-none-eabi-gcc`, `arm-none-eabi-objcopy`, dan utilitas terkait).
 - `hid-flash` dari STM32 HID Bootloader untuk upload melalui USB.
 - Opsional: STM32CubeMX 6.18.1 dan STM32CubeF1 HAL v1.8.7 untuk membuka atau meregenerasi file `.ioc`.
-
-### Inisialisasi project untuk VS Code atau Zed
-
-Konfigurasi development environment untuk **Visual Studio Code** atau **Zed** dapat dibuat menggunakan repository [saufik-ramadhan/stm32-vscode-init](https://github.com/saufik-ramadhan/stm32-vscode-init).
-
-Tool tersebut dapat digunakan untuk membantu menyiapkan integrasi project STM32 berbasis CMake, termasuk task build, flash, dan debug editor. Project ini sudah memiliki konfigurasi Zed pada direktori `.zed/`, termasuk task build dan flash melalui STM32 HID Bootloader. Ikuti petunjuk instalasi dan penggunaan terbaru pada README repository `stm32-vscode-init` apabila konfigurasi perlu dibuat ulang atau project dibuka pada komputer lain.
 
 ### Build dengan preset CMake portabel
 
