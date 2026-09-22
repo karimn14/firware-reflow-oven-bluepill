@@ -63,8 +63,35 @@ Tabel berikut menyajikan perbandingan metrik termal utama untuk setiap variasi *
 
 ---
 
-## 5. Rekomendasi Strategi Kontrol
+## 5. Rekomendasi Strategi Kontrol Reflow
 
-* **Pemanasan Awal (*Ramp-up Stage*):** Gunakan **Duty Cycle 75% - 100%** pada fase awal untuk mengejar *setpoint* dengan cepat.
-* **Pencegahan Overshoot (*Fine Tuning Stage*):** Turunkan daya ke **Duty Cycle 25%** atau matikan *heater* lebih awal ($\approx 30 - 40^\circ\text{C}$ sebelum *setpoint*).
-* **Implementasi Algoritma PID:** Wajib menggunakan algoritma kontrol PID dengan parameter **Derivative ($D$)** yang kuat untuk meredam laju kenaikan cepat, serta dilengkapi mekanisme **Anti-Windup** untuk mencegah akumulasi *error* saat *ramp-up*.
+Regresi linier terhadap laju rata-rata keempat pengujian menghasilkan pendekatan:
+
+$$\frac{dT}{dt} \approx 0{,}02647 \times \text{duty} - 0{,}0094\quad[{}^\circ\text{C}/\text{s}]$$
+
+Profil POC menaikkan target sekitar 30 °C dalam 75 detik, setara 0,40 °C/s. Karena pengujian 25% sudah menghasilkan rata-rata 0,58 °C/s, duty 75–100% tidak diperlukan untuk mengikuti profil tersebut. Daya tinggi hanya memperbesar energi tersimpan dan overshoot.
+
+Parameter awal firmware hasil tuning:
+
+| Parameter | Nilai | Dasar pemilihan |
+| :--- | :---: | :--- |
+| Ramp setpoint | 0,45 °C/s | Sedikit lebih cepat dari kebutuhan tahap 0,40 °C/s agar tersedia waktu settling |
+| $K_p$ | 1,5 | Koreksi proporsional dibuat moderat untuk plant dengan delay panjang |
+| $K_i$ | 0,035 | Mengoreksi rugi panas tanpa windup cepat |
+| $K_d$ | 14,0 | Meredam laju kenaikan suhu; derivatif diterapkan pada measurement |
+| Gain feed-forward | 0,0265 °C/s per 1% duty | Hasil regresi laju rata-rata |
+| Horizon prediksi | 12 detik | Sebagian dari lag terukur 16,7–21 detik agar cutoff tidak terlalu dini |
+| Duty maksimum PID | 50% | Masih menyediakan kemampuan mengejar profil tanpa wilayah overshoot 75–100% |
+
+Strategi kontrol yang diterapkan:
+
+1. Feed-forward menghasilkan duty dasar dari laju ramp yang diminta.
+2. PID memperbaiki selisih terhadap ramped setpoint dan menggunakan anti-windup.
+3. Suhu prediksi dihitung dari suhu terfilter ditambah laju kenaikan selama horizon 12 detik.
+4. Batas daya diturunkan bertahap menjadi 45%, 30%, 15%, lalu 0% ketika suhu prediksi mendekati target.
+5. Fan diaktifkan pada 50%, 70%, atau 100% ketika suhu prediksi menunjukkan overshoot. Heater dan fan tidak aktif bersamaan.
+6. Pada fase cooling, fan dijalankan 100% hingga suhu turun ke batas akhir profil.
+
+Fan yang digunakan adalah tipe 4-wire. Sinyal kontrol PA7 dibangkitkan oleh TIM3 CH2 sebagai PWM 25 kHz open-drain, sementara tacho tidak dihubungkan. Karena itu kontrol fan masih open-loop dan tidak dapat memastikan RPM aktual atau mendeteksi fan macet. Perilaku 0% perlu diperiksa pada datasheet fan karena sebagian tipe tetap berputar pada kecepatan minimum.
+
+Gain pendinginan fan belum tersedia dalam data karakterisasi ini. Ambang dan duty fan merupakan nilai awal konservatif dan perlu divalidasi dengan satu pengujian profil lengkap yang mencatat suhu, duty heater, serta duty fan.

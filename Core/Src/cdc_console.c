@@ -126,10 +126,10 @@ static void console_print_status(void)
                                     ? (int16_t)-status.temperature_tenths
                                     : status.temperature_tenths;
     (void)TextFormat(response, sizeof(response),
-        "screen=%s heater=%s duty=%u%% adc=%u temperature=%s%d.%dC "
+        "screen=%s heater=%s duty=%u%% fan=%u%% adc=%u temperature=%s%d.%dC "
         "resistance=%luohm calibrated=%s pid=%s setpoint=%s%d.%dC\r\n",
         screen_name(status.screen), status.heater_enabled ? "on" : "off",
-        status.heater_duty_percent, status.adc,
+        status.heater_duty_percent, status.fan_duty_percent, status.adc,
         (status.temperature_tenths < 0) ? "-" : "",
         temperature_magnitude / 10, temperature_magnitude % 10,
         (unsigned long)status.resistance_ohm,
@@ -141,10 +141,10 @@ static void console_print_status(void)
   else
   {
     (void)TextFormat(response, sizeof(response),
-        "screen=%s heater=%s duty=%u%% adc=%u temperature=invalid "
+        "screen=%s heater=%s duty=%u%% fan=%u%% adc=%u temperature=invalid "
         "calibrated=%s pid=%s setpoint=%s%d.%dC\r\n",
         screen_name(status.screen), status.heater_enabled ? "on" : "off",
-        status.heater_duty_percent, status.adc,
+        status.heater_duty_percent, status.fan_duty_percent, status.adc,
         status.thermistor_calibrated ? "yes" : "no",
         status.pid_fault ? "fault" : (status.pid_running ? "running" : "stopped"),
         (status.pid_setpoint_tenths < 0) ? "-" : "",

@@ -29,6 +29,7 @@ typedef struct
   uint8_t thermistor_calibrated;
   uint8_t heater_enabled;
   uint8_t heater_duty_percent;
+  uint8_t fan_duty_percent;
   uint8_t pid_running;
   uint8_t pid_fault;
 } HardwareTestStatus;
@@ -40,6 +41,7 @@ void HardwareTest_GetStatus(HardwareTestStatus *status);
 uint8_t HardwareTest_PIDStartAt(int16_t setpoint_tenths);
 void HardwareTest_PIDSetSetpoint(int16_t setpoint_tenths);
 void HardwareTest_PIDStop(void);
+void HardwareTest_FanSetDuty(uint8_t duty_percent);
 uint8_t HardwareTest_HeaterStartAtDuty(uint8_t duty_percent,
                                        int16_t safety_limit_tenths);
 void HardwareTest_HeaterStop(void);

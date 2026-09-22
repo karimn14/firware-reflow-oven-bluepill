@@ -79,8 +79,8 @@ Nilai posisi encoder, deadband motor, duty conveyor, dan pulse servo pada firmwa
 |---|---:|---|---|
 | Thermistor | PA0 | ADC1 IN0 | Input analog, 12-bit |
 | Servo sorter | PA1 | TIM2 CH2 | PWM 50 Hz, 1 µs/tick; 1000/1500/2000 µs |
-| PWM heater / SSR | PA6 | TIM3 CH1 | PWM 1 Hz, aktif-high; digunakan aplikasi |
-| PWM fan | PA7 | TIM3 CH2 | PWM 1 Hz; baru dikonfigurasi, belum dijalankan aplikasi |
+| Heater / SSR | PA6 | GPIO output | Aktif-high; time-proportioning software dengan jendela 1 detik |
+| PWM fan 4-wire | PA7 | TIM3 CH2 | PWM 25 kHz open-drain; active braking PID dan cooling reflow |
 | Encoder conveyor | PA8 | TIM1 CH1 | External clock rising-edge, pull-down, filter digital IC1F=`0xF` |
 | Sensor IR PCB | PB1 | GPIO input | Aktif-low, pull-up, debounce 150 ms |
 | OLED SCL | PB6 | I2C1 SCL | 400 kHz, open-drain |
@@ -138,7 +138,7 @@ Duty awal adalah 40% dan dapat diatur pada rentang 30–100%. Perubahan duty lan
 | C | Menurunkan duty cycle sebesar 25% |
 | D | Masuk ke kalibrasi thermistor |
 
-Duty cycle awal adalah 50%. Timer heater menggunakan periode 1 detik (PWM 1 Hz), sesuai untuk pengujian SSR zero-cross. Mode ini adalah mode manual dan tidak memiliki cutoff suhu otomatis; operator tetap bertanggung jawab mengawasi suhu dan sistem daya. Gunakan mode karakterisasi, bukan mode manual, untuk pengujian kemampuan heater dengan cutoff 110 °C.
+Duty cycle awal adalah 50%. Heater menggunakan time-proportioning software dengan jendela 1 detik, sesuai untuk pengujian SSR zero-cross. Mode ini adalah mode manual dan tidak memiliki cutoff suhu otomatis; operator tetap bertanggung jawab mengawasi suhu dan sistem daya. Gunakan mode karakterisasi, bukan mode manual, untuk pengujian kemampuan heater dengan cutoff 110 °C.
 
 ### 2. Kalibrasi thermistor dua titik
 
@@ -176,15 +176,20 @@ Setpoint awal adalah 70 °C dan dapat diatur pada rentang 20–140 °C. PID hany
 
 | Parameter | Nilai |
 |---|---:|
-| Kp | 3,0 |
-| Ki | 0,05 |
-| Kd | 15,0 |
+| Kp | 1,5 |
+| Ki | 0,035 |
+| Kd | 14,0 |
 | Interval kontrol | 250 ms |
-| Laju ramp setpoint | 0,5 °C/s |
+| Laju ramp setpoint | 0,45 °C/s |
 | Konstanta filter derivatif | 1,0 s |
+| Feed-forward heater | 0,0265 °C/s per 1% duty |
+| Horizon prediksi inersia | 12 detik |
+| Batas duty PID | 50% |
 | Batas keselamatan | heater off pada ≥150 °C |
 
-Nilai tersebut masih bersifat parameter awal untuk plant hot plate dan perlu divalidasi/tuning pada hardware sebenarnya.
+Parameter tersebut diturunkan dari empat log pada direktori `heater_char`. Laju ramp 0,45 °C/s berada di bawah kemampuan rata-rata heater pada duty 25% (sekitar 0,58 °C/s), sedangkan duty PID dibatasi 50% karena pengujian 75–100% menghasilkan overshoot lebih dari 40 °C. Pengendali memakai feed-forward untuk mengejar ramp, PID untuk mengoreksi error, serta prediksi suhu untuk mengurangi daya sebelum suhu aktual mencapai target.
+
+Fan 4-wire bekerja sebagai pengereman termal bertingkat 50%, 70%, atau 100% ketika suhu prediksi melewati target. Heater dan fan tidak diperintah aktif bersamaan. TIM3 CH2 menghasilkan PWM 25 kHz open-drain pada PA7, sedangkan heater PA6 dikendalikan dengan time-proportioning software berjendela 1 detik agar cocok untuk SSR zero-cross. Kabel tacho fan tidak digunakan, sehingga duty fan bersifat open-loop tanpa pembacaan RPM atau deteksi fan macet. Perilaku fan pada perintah 0% bergantung pada tipenya; bila unit tidak berhenti pada 0%, pemutusan daya fan memerlukan sakelar daya terpisah.
 
 ### 4. Mode PCB reflow POC
 
@@ -212,9 +217,9 @@ Durasi setiap tahap pemanasan masih tetap di dalam firmware. Target suhu dapat d
 
 Firmware menjaga urutan target `Preheat < Soaking < Reflow` dengan selisih minimum 5 °C. Target preheat tidak dapat diturunkan di bawah 40 °C dan target puncak reflow tidak dapat dinaikkan di atas 120 °C. Perubahan target dikunci selama profil berjalan. Pengaturan profil belum disimpan ke flash dan kembali ke nilai bawaan setelah reset.
 
-OLED menampilkan tahap aktif (`IDLE`, `PREHEAT`, `SOAKING`, `REFLOW`, atau `COOLING`), suhu aktual, waktu total, ketiga target, output heater, dan target tahap aktif. Grafik menyimpan 128 sampel dengan interval 2 detik, sehingga menampilkan sekitar 256 detik riwayat suhu; garis titik-titik menunjukkan target aktif. Skala grafik adalah 20–120 °C.
+OLED menampilkan tahap aktif (`IDLE`, `PREHEAT`, `SOAKING`, `REFLOW`, atau `COOLING`), suhu aktual, waktu total, ketiga target, output heater/fan, dan target tahap aktif. Grafik menyimpan 128 sampel dengan interval 2 detik, sehingga menampilkan sekitar 256 detik riwayat suhu; garis titik-titik menunjukkan target aktif. Skala grafik adalah 20–120 °C.
 
-Profil hanya dapat dimulai jika thermistor sudah dikalibrasi dan pembacaannya valid. Selama tahap pemanasan, suhu aktual ≥125 °C atau fault PID langsung mematikan heater dan memindahkan state ke cooling dengan indikator fault `!`. Kehilangan pembacaan sensor mematikan profil. Cooling saat ini bersifat pasif karena output fan belum digunakan.
+Profil hanya dapat dimulai jika thermistor sudah dikalibrasi dan pembacaannya valid. Selama tahap pemanasan, suhu aktual ≥125 °C atau fault PID langsung mematikan heater dan memindahkan state ke cooling dengan indikator fault `!`. Kehilangan pembacaan sensor mematikan profil. Pada state cooling, heater dimatikan dan fan PA7 dijalankan 100% hingga suhu ≤50 °C.
 
 > [!WARNING]
 > Profil 120 °C ini hanya untuk proof-of-concept dan tidak cukup untuk proses solder reflow produksi. Batas 120 °C adalah batas **target**; inersia termal masih dapat menyebabkan overshoot, sehingga firmware menggunakan cutoff tambahan pada 125 °C. Tetap gunakan pengaman termal independen dan pengawasan operator.
@@ -421,7 +426,7 @@ Perintah yang tersedia:
 | `help` | Menampilkan daftar perintah |
 | `ping` | Menguji komunikasi; perangkat membalas `pong` |
 | `info` | Menampilkan board, nama firmware, transport, dan bootloader |
-| `status` | Membaca layar aktif, heater, duty, ADC, suhu, resistansi, kalibrasi, PID, dan setpoint |
+| `status` | Membaca layar aktif, heater, duty heater/fan, ADC, suhu, resistansi, kalibrasi, PID, dan setpoint |
 | `echo <teks>` | Mengirim kembali teks ke host |
 
 Command console tetap tidak dapat menyalakan heater atau mengubah PID. Frame `$RESULT` dengan ID PCB aktif hanya diterima ketika state conveyor sedang `INSPECTION`; efeknya terbatas pada pilihan arah servo sebelum fallback PASS otomatis dijalankan.

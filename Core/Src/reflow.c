@@ -86,12 +86,14 @@ static void enter_heating_stage(ReflowState state, int16_t target_tenths,
 {
   reflow_state = state;
   stage_started_at = now;
+  HardwareTest_FanSetDuty(0U);
   HardwareTest_PIDSetSetpoint(target_tenths);
 }
 
 static void enter_cooling(uint8_t fault, uint32_t now)
 {
   HardwareTest_PIDStop();
+  HardwareTest_FanSetDuty(100U);
   reflow_fault = fault;
   reflow_state = REFLOW_STATE_COOLING;
   stage_started_at = now;
@@ -107,6 +109,7 @@ static void stop_profile(uint8_t fault, uint32_t now)
   {
     HardwareTest_PIDStop();
   }
+  HardwareTest_FanSetDuty(0U);
   reflow_fault = fault;
   if (reflow_state != REFLOW_STATE_IDLE)
   {
@@ -130,6 +133,7 @@ static void start_profile(uint32_t now)
     return;
   }
   heater_lock_held = 1U;
+  HardwareTest_FanSetDuty(0U);
   HardwareTest_GetStatus(&hardware);
   if ((hardware.temperature_valid == 0U)
       || (hardware.thermistor_calibrated == 0U)
@@ -159,6 +163,7 @@ static void start_timed_test(uint32_t now)
     return;
   }
   heater_lock_held = 1U;
+  HardwareTest_FanSetDuty(0U);
   HardwareTest_GetStatus(&hardware);
   if ((hardware.temperature_valid == 0U)
       || (hardware.thermistor_calibrated == 0U)

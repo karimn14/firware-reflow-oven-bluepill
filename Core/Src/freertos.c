@@ -221,7 +221,9 @@ void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)
 {
   (void)task;
   (void)task_name;
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
+  HAL_GPIO_WritePin(PWM_HEATER_GPIO_Port, PWM_HEATER_Pin, GPIO_PIN_RESET);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2,
+                        __HAL_TIM_GET_AUTORELOAD(&htim3) + 1U);
   __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0U);
   taskDISABLE_INTERRUPTS();
   for (;;)

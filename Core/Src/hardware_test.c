@@ -21,7 +21,8 @@
 #define ADC_AVERAGE_SAMPLES     32U
 #define BUTTON_DEBOUNCE_SAMPLES 2U
 #define DISPLAY_UPDATE_MS       50U
-#define HEATER_PWM_CHANNEL      TIM_CHANNEL_1
+#define FAN_PWM_CHANNEL         TIM_CHANNEL_2
+#define HEATER_WINDOW_MS        1000U
 #define HEATER_DEFAULT_DUTY     50U
 #define HEATER_DUTY_STEP        25U
 #define CALIBRATION_EXIT_HOLD_MS 1500U
@@ -34,11 +35,15 @@
 #define PID_SETPOINT_MIN_TENTHS    200
 #define PID_SETPOINT_MAX_TENTHS    1400
 #define PID_SAFETY_LIMIT_TENTHS    1500
-#define PID_KP                      3.0f
-#define PID_KI                      0.05f
-#define PID_KD                      15.0f
-#define PID_SETPOINT_RAMP_C_PER_S   0.5f
+#define PID_KP                      1.5f
+#define PID_KI                      0.035f
+#define PID_KD                      14.0f
+#define PID_SETPOINT_RAMP_C_PER_S   0.45f
 #define PID_DERIVATIVE_FILTER_S     1.0f
+#define PID_HEATER_RATE_PER_DUTY    0.0265f
+#define PID_PREDICTION_HORIZON_S    12.0f
+#define PID_MAX_HEATER_DUTY         50.0f
+#define PID_INTEGRAL_MAX            35.0f
 #define REFLOW_EXIT_HOLD_MS         1500U
 #define REFLOW_REPEAT_RATE_MS        100U
 #define REFLOW_TEMPERATURE_STEP_TENTHS 10
@@ -78,6 +83,10 @@ static uint32_t last_display_update;
 static uint8_t heater_enabled;
 static uint8_t heater_duty_percent = HEATER_DEFAULT_DUTY;
 static uint8_t heater_manual_duty_percent = HEATER_DEFAULT_DUTY;
+static uint8_t fan_duty_percent;
+static uint8_t heater_window_active;
+static uint32_t heater_window_started_at;
+static uint32_t heater_on_time_ms;
 static volatile int16_t heater_safety_limit_tenths;
 static uint16_t handled_press_count[4];
 static Screen current_screen;
@@ -216,20 +225,68 @@ static void update_button_auto_repeat(void)
   }
 }
 
+static void update_heater_output(void)
+{
+  uint32_t now;
+  uint32_t elapsed;
+
+  if (ProcessInterlock_GetOwner() == PROCESS_OWNER_CONVEYOR)
+  {
+    heater_enabled = 0U;
+    heater_window_active = 0U;
+  }
+  if ((heater_enabled == 0U) || (heater_on_time_ms == 0U))
+  {
+    HAL_GPIO_WritePin(PWM_HEATER_GPIO_Port, PWM_HEATER_Pin, GPIO_PIN_RESET);
+    return;
+  }
+
+  now = HAL_GetTick();
+  elapsed = now - heater_window_started_at;
+  if (elapsed >= HEATER_WINDOW_MS)
+  {
+    heater_window_started_at = now - (elapsed % HEATER_WINDOW_MS);
+    elapsed %= HEATER_WINDOW_MS;
+  }
+  HAL_GPIO_WritePin(PWM_HEATER_GPIO_Port, PWM_HEATER_Pin,
+                    (elapsed < heater_on_time_ms)
+                    ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
 static void set_heater_output(void)
 {
-  uint32_t compare = 0U;
+  uint8_t should_enable;
 
   if (ProcessInterlock_GetOwner() == PROCESS_OWNER_CONVEYOR)
   {
     heater_enabled = 0U;
   }
-  if (heater_enabled != 0U)
+  should_enable = ((heater_enabled != 0U) && (heater_duty_percent > 0U))
+                  ? 1U : 0U;
+  if ((should_enable != 0U) && (heater_window_active == 0U))
   {
-    compare = ((uint32_t)__HAL_TIM_GET_AUTORELOAD(&htim3) + 1U)
-              * heater_duty_percent / 100U;
+    heater_window_started_at = HAL_GetTick();
   }
-  __HAL_TIM_SET_COMPARE(&htim3, HEATER_PWM_CHANNEL, compare);
+  heater_window_active = should_enable;
+  heater_on_time_ms = (should_enable != 0U)
+                      ? ((uint32_t)heater_duty_percent * HEATER_WINDOW_MS
+                         / 100U)
+                      : 0U;
+  update_heater_output();
+}
+
+static void set_fan_output(uint8_t duty_percent)
+{
+  uint32_t compare;
+
+  if (duty_percent > 100U)
+  {
+    duty_percent = 100U;
+  }
+  fan_duty_percent = duty_percent;
+  compare = ((uint32_t)__HAL_TIM_GET_AUTORELOAD(&htim3) + 1U)
+            * fan_duty_percent / 100U;
+  __HAL_TIM_SET_COMPARE(&htim3, FAN_PWM_CHANNEL, compare);
 }
 
 static void enforce_direct_heater_safety(void)
@@ -276,6 +333,7 @@ static void pid_stop(uint8_t fault)
   pid_i_term = 0.0f;
   pid_d_term = 0.0f;
   pid_apply_output(0.0f);
+  set_fan_output((fault != 0U) ? 100U : 0U);
 }
 
 static uint8_t pid_start(void)
@@ -300,6 +358,7 @@ static uint8_t pid_start(void)
   pid_previous_filtered_temperature = measurement;
   pid_last_update = HAL_GetTick();
   pid_apply_output(0.0f);
+  set_fan_output(0U);
   return 1U;
 }
 
@@ -325,15 +384,20 @@ static void update_pid_controller(void)
   float dt;
   float measurement;
   float requested_setpoint;
+  float previous_ramped_setpoint;
+  float setpoint_rate;
   float ramp_step;
   float filter_alpha;
   float temperature_rate;
+  float predicted_temperature;
+  float prediction_error;
   float error;
-  float final_error;
-  float output_limit = 100.0f;
+  float feedforward_output;
+  float output_limit = PID_MAX_HEATER_DUTY;
   float candidate_integral;
   float unclamped_output;
   float commanded_output;
+  uint8_t requested_fan_duty = 0U;
 
   if (pid_running == 0U)
   {
@@ -362,6 +426,7 @@ static void update_pid_controller(void)
 
   measurement = (float)latest_temperature_tenths / 10.0f;
   requested_setpoint = (float)pid_setpoint_tenths / 10.0f;
+  previous_ramped_setpoint = pid_ramped_setpoint;
   ramp_step = PID_SETPOINT_RAMP_C_PER_S * dt;
   if (pid_ramped_setpoint < requested_setpoint)
   {
@@ -379,6 +444,7 @@ static void update_pid_controller(void)
       pid_ramped_setpoint = requested_setpoint;
     }
   }
+  setpoint_rate = (pid_ramped_setpoint - previous_ramped_setpoint) / dt;
 
   filter_alpha = dt / (PID_DERIVATIVE_FILTER_S + dt);
   pid_filtered_temperature += filter_alpha
@@ -388,28 +454,45 @@ static void update_pid_controller(void)
   pid_previous_filtered_temperature = pid_filtered_temperature;
 
   error = pid_ramped_setpoint - measurement;
-  final_error = requested_setpoint - measurement;
+  predicted_temperature = measurement;
+  if (temperature_rate > 0.0f)
+  {
+    predicted_temperature += temperature_rate * PID_PREDICTION_HORIZON_S;
+  }
+  prediction_error = requested_setpoint - predicted_temperature;
   pid_p_term = PID_KP * error;
   pid_d_term = -PID_KD * temperature_rate;
 
-  /* Taper maximum power close to the final setpoint. This leaves room for
-   * stored thermal energy and is intentionally conservative. */
-  if (final_error < 1.0f)
+  /* The characterization runs give approximately 0.0265 degC/s for every
+   * percent of heater duty. Feed forward the requested ramp and leave the PID
+   * terms to correct losses and model error. */
+  feedforward_output = (setpoint_rate > 0.0f)
+                       ? (setpoint_rate / PID_HEATER_RATE_PER_DUTY)
+                       : 0.0f;
+
+  /* The measured plant continues heating for roughly 17-21 seconds after
+   * cutoff. Taper against predicted temperature instead of present error. */
+  if (prediction_error <= 0.0f)
+  {
+    output_limit = 0.0f;
+  }
+  else if (prediction_error < 3.0f)
   {
     output_limit = 15.0f;
   }
-  else if (final_error < 3.0f)
+  else if (prediction_error < 8.0f)
   {
     output_limit = 30.0f;
   }
-  else if (final_error < 8.0f)
+  else if (prediction_error < 15.0f)
   {
-    output_limit = 60.0f;
+    output_limit = 45.0f;
   }
 
   candidate_integral = clamp_float(pid_integral + (PID_KI * error * dt),
-                                   0.0f, 60.0f);
-  unclamped_output = pid_p_term + candidate_integral + pid_d_term;
+                                   0.0f, PID_INTEGRAL_MAX);
+  unclamped_output = feedforward_output + pid_p_term
+                     + candidate_integral + pid_d_term;
 
   /* Conditional integration prevents windup while output is saturated. */
   if (((unclamped_output > 0.0f) && (unclamped_output < output_limit))
@@ -419,12 +502,30 @@ static void update_pid_controller(void)
     pid_integral = candidate_integral;
   }
   pid_i_term = pid_integral;
-  commanded_output = clamp_float(pid_p_term + pid_i_term + pid_d_term,
+  commanded_output = clamp_float(feedforward_output + pid_p_term
+                                 + pid_i_term + pid_d_term,
                                  0.0f, output_limit);
 
-  /* Cut heat immediately above target. Allow output to rise gradually, but
-   * never limit a downward correction. */
-  if (measurement >= (requested_setpoint + 0.2f))
+  /* Fan braking is deliberately separated from heater drive: the two outputs
+   * are never commanded simultaneously. Its gain still needs hardware data,
+   * so use coarse, conservative stages until a fan characterization exists. */
+  if ((measurement >= (requested_setpoint + 1.0f))
+      || (predicted_temperature >= (requested_setpoint + 4.0f)))
+  {
+    requested_fan_duty = 100U;
+  }
+  else if (predicted_temperature >= (requested_setpoint + 2.0f))
+  {
+    requested_fan_duty = 70U;
+  }
+  else if ((measurement >= (requested_setpoint + 0.3f))
+           && (temperature_rate > 0.1f))
+  {
+    requested_fan_duty = 50U;
+  }
+
+  if ((measurement >= (requested_setpoint + 0.3f))
+      || (requested_fan_duty != 0U))
   {
     commanded_output = 0.0f;
     pid_integral *= 0.98f;
@@ -434,7 +535,15 @@ static void update_pid_controller(void)
     commanded_output = pid_output_percent + 10.0f;
   }
 
+  if (commanded_output > 0.0f)
+  {
+    set_fan_output(0U);
+  }
   pid_apply_output(commanded_output);
+  if (commanded_output <= 0.0f)
+  {
+    set_fan_output(requested_fan_duty);
+  }
 }
 
 static void enter_calibration_screen(void)
@@ -1104,11 +1213,12 @@ static void draw_pid_screen(void)
   (void)TextFormat(line, sizeof(line), "PV:%.6s SP:%.6s",
                  process_value, setpoint);
   SSD1306_DrawString(&oled, 0U, 1U, line);
-  (void)TextFormat(line, sizeof(line), "R:%.6s OUT:%3u%%", ramped_setpoint,
+  (void)TextFormat(line, sizeof(line), "R:%.6s H:%3u%%", ramped_setpoint,
                  (unsigned int)(pid_output_percent + 0.5f));
   SSD1306_DrawString(&oled, 0U, 2U, line);
-  (void)TextFormat(line, sizeof(line), "STATE:%s",
-                 pid_fault ? "FAULT" : (pid_running ? "RUN" : "READY"));
+  (void)TextFormat(line, sizeof(line), "%s FAN:%3u%%",
+                 pid_fault ? "FAULT" : (pid_running ? "RUN" : "READY"),
+                 fan_duty_percent);
   SSD1306_DrawString(&oled, 0U, 3U, line);
   (void)TextFormat(line, sizeof(line), "P:%d I:%d D:%d",
                  (int)pid_p_term, (int)pid_i_term, (int)pid_d_term);
@@ -1248,9 +1358,9 @@ static void draw_reflow_screen(void)
     previous_y = y;
   }
 
-  (void)TextFormat(line, sizeof(line), "%sOUT:%3u%% TGT:%3dC",
+  (void)TextFormat(line, sizeof(line), "%sH:%3u F:%3u T:%3d",
                  status.fault ? "!" : " ", heater_duty_percent,
-                 target / 10);
+                 fan_duty_percent, target / 10);
   SSD1306_DrawString(&oled, 0U, 6U, line);
   SSD1306_DrawString(&oled, 0U, 7U,
                      (status.state == REFLOW_STATE_IDLE)
@@ -1435,9 +1545,15 @@ void HardwareTest_Init(void)
 {
   hardware_initialized = 0U;
   heater_safety_limit_tenths = 0;
-  /* Start PWM at 0% so PA6 and the SSR are guaranteed OFF at boot. */
-  __HAL_TIM_SET_COMPARE(&htim3, HEATER_PWM_CHANNEL, 0U);
-  if (HAL_TIM_PWM_Start(&htim3, HEATER_PWM_CHANNEL) != HAL_OK)
+  fan_duty_percent = 0U;
+  heater_window_active = 0U;
+  heater_window_started_at = HAL_GetTick();
+  heater_on_time_ms = 0U;
+  /* PA6 drives the SSR in a software time-proportioning window. TIM3 is
+   * dedicated to the 25 kHz four-wire fan control signal on PA7. */
+  HAL_GPIO_WritePin(PWM_HEATER_GPIO_Port, PWM_HEATER_Pin, GPIO_PIN_RESET);
+  __HAL_TIM_SET_COMPARE(&htim3, FAN_PWM_CHANNEL, 0U);
+  if (HAL_TIM_PWM_Start(&htim3, FAN_PWM_CHANNEL) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1478,6 +1594,7 @@ void HardwareTest_InputRun(void)
   update_button_auto_repeat();
   update_pid_controller();
   enforce_direct_heater_safety();
+  update_heater_output();
 }
 
 void HardwareTest_Run(void)
@@ -1572,6 +1689,7 @@ void HardwareTest_GetStatus(HardwareTestStatus *status)
   status->thermistor_calibrated = Thermistor_IsCalibrated();
   status->heater_enabled = heater_enabled;
   status->heater_duty_percent = heater_duty_percent;
+  status->fan_duty_percent = fan_duty_percent;
   status->pid_running = pid_running;
   status->pid_fault = pid_fault;
 }
@@ -1598,6 +1716,17 @@ void HardwareTest_PIDSetSetpoint(int16_t setpoint_tenths)
 void HardwareTest_PIDStop(void)
 {
   pid_stop(0U);
+}
+
+void HardwareTest_FanSetDuty(uint8_t duty_percent)
+{
+  if ((duty_percent > 0U) && (heater_enabled != 0U))
+  {
+    heater_enabled = 0U;
+    pid_output_percent = 0.0f;
+    set_heater_output();
+  }
+  set_fan_output(duty_percent);
 }
 
 uint8_t HardwareTest_HeaterStartAtDuty(uint8_t duty,
