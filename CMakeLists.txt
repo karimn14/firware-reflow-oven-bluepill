@@ -57,6 +57,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/inspection.c
     Core/Src/motor.c
     Core/Src/pcb_sensor.c
+    Core/Src/pi_protocol.c
     Core/Src/process_interlock.c
     Core/Src/reflow.c
     Core/Src/servo.c

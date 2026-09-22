@@ -56,7 +56,7 @@ static StaticTask_t inputTaskControlBlock;
 static StackType_t inputTaskStack[96];
 TaskHandle_t inputTaskHandle;
 static StaticTask_t cdcTaskControlBlock;
-static StackType_t cdcTaskStack[192];
+static StackType_t cdcTaskStack[224];   /* console + Pi protocol frames */
 TaskHandle_t cdcTaskHandle;
 static StaticTask_t reflowTaskControlBlock;
 static StackType_t reflowTaskStack[96];

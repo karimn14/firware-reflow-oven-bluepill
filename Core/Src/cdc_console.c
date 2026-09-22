@@ -228,7 +228,8 @@ static void console_execute(char *command)
         "  info         show firmware information\r\n"
         "  status       show sensor and controller status\r\n"
         "  echo <text>  return text to the host\r\n"
-        "Protocol: $RESULT,id=<n>,PASS|FAIL*CS\r\n");
+        "Lines starting with '$' are Raspberry Pi protocol frames\r\n"
+        "(sunda_reflow_oven/docs/stm-pi-protocol.md).\r\n");
   }
   else if (strcmp(command, "ping") == 0)
   {
@@ -252,24 +253,6 @@ static void console_execute(char *command)
   else if (*command != '\0')
   {
     console_write_text("Unknown command. Type 'help'.\r\n");
-  }
-}
-
-static void console_send_inspection_request(void)
-{
-  uint32_t board_id;
-  char frame[48];
-  size_t length;
-
-  if ((terminal_connected == 0U)
-      || (Inspection_TakeRequest(&board_id) == 0U))
-  {
-    return;
-  }
-  length = Inspection_FormatRequest(frame, sizeof(frame), board_id);
-  if (length < sizeof(frame))
-  {
-    (void)console_write(frame, (uint16_t)length);
   }
 }
 
@@ -327,6 +310,7 @@ void CDC_Console_Task(void *argument)
       protocol_line = 0U;
       seen_characterization_session = 0U;
       seen_characterization_sequence = 0U;
+      Inspection_OnHostConnected();
       console_print_welcome();
     }
 
@@ -393,7 +377,7 @@ void CDC_Console_Task(void *argument)
         }
       }
     }
-    console_send_inspection_request();
+    Inspection_CdcPoll(console_write, terminal_connected);
     console_print_characterization_log(&seen_characterization_session,
                                        &seen_characterization_sequence);
     vTaskDelay(pdMS_TO_TICKS(5U));
