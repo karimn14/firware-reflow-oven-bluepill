@@ -58,6 +58,29 @@ static void write_unsigned(TextWriter *writer, uint32_t value, uint8_t width,
   }
 }
 
+static void write_hex(TextWriter *writer, uint32_t value, uint8_t width,
+                      char padding, uint8_t uppercase)
+{
+  char digits[8];
+  const char *alphabet = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
+  uint8_t count = 0U;
+
+  do
+  {
+    digits[count++] = alphabet[value & 0x0fU];
+    value >>= 4U;
+  } while ((value != 0U) && (count < sizeof(digits)));
+  while (count < width)
+  {
+    write_character(writer, padding);
+    --width;
+  }
+  while (count > 0U)
+  {
+    write_character(writer, digits[--count]);
+  }
+}
+
 static void write_signed(TextWriter *writer, int32_t value, uint8_t width,
                          char padding)
 {
@@ -155,6 +178,14 @@ int TextFormat(char *buffer, size_t size, const char *format, ...)
                        ? (uint32_t)va_arg(arguments, unsigned long)
                        : (uint32_t)va_arg(arguments, unsigned int),
                        width, padding);
+        break;
+      case 'x':
+      case 'X':
+        write_hex(&writer,
+                  (long_argument != 0U)
+                  ? (uint32_t)va_arg(arguments, unsigned long)
+                  : (uint32_t)va_arg(arguments, unsigned int),
+                  width, padding, (*format == 'X') ? 1U : 0U);
         break;
       default:
         write_character(&writer, '%');

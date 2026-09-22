@@ -15,6 +15,7 @@ typedef enum
   REFLOW_STATE_PREHEAT,
   REFLOW_STATE_SOAKING,
   REFLOW_STATE_REFLOW,
+  REFLOW_STATE_TIMED_TEST,
   REFLOW_STATE_COOLING
 } ReflowState;
 
@@ -41,6 +42,7 @@ typedef struct
 void Reflow_Init(void);
 void Reflow_Task(void *argument);
 void Reflow_RequestStart(void);
+uint8_t Reflow_RequestTimedTest(uint32_t duration_ms, uint8_t duty_percent);
 void Reflow_RequestStop(void);
 void Reflow_SelectNextProfile(void);
 void Reflow_AdjustSelectedTemperature(int16_t change_tenths);

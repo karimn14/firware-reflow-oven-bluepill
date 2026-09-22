@@ -59,11 +59,18 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define TERMISTOR_Pin GPIO_PIN_0
 #define TERMISTOR_GPIO_Port GPIOA
+#define CONVEYOR_SERVO_Pin GPIO_PIN_1
+#define CONVEYOR_SERVO_GPIO_Port GPIOA
 #define PWM_HEATER_Pin GPIO_PIN_6
 #define PWM_HEATER_GPIO_Port GPIOA
 #define PWM_FAN_Pin GPIO_PIN_7
 #define PWM_FAN_GPIO_Port GPIOA
-#define PWM_DC_MOTOR_Pin GPIO_PIN_0
+#define CONVEYOR_ENCODER_Pin GPIO_PIN_8
+#define CONVEYOR_ENCODER_GPIO_Port GPIOA
+#define CONVEYOR_ENCODER_EXTI_IRQn EXTI9_5_IRQn
+#define CONVEYOR_IR_Pin GPIO_PIN_1
+#define CONVEYOR_IR_GPIO_Port GPIOB
+#define PWM_DC_MOTOR_Pin GPIO_PIN_8
 #define PWM_DC_MOTOR_GPIO_Port GPIOB
 #define BTN_A_Pin GPIO_PIN_12
 #define BTN_A_GPIO_Port GPIOB

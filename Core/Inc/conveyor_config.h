@@ -1,0 +1,42 @@
+#ifndef CONVEYOR_CONFIG_H
+#define CONVEYOR_CONFIG_H
+
+#include "main.h"
+#include "tim.h"
+
+/* STM32F103 Blue Pill adaptation of ../sunda_reflow_oven/firmware/conveyor. */
+#define CONVEYOR_ENCODER_SLOTS                 20U
+#define CONVEYOR_PWM_TIM                       (&htim4)
+#define CONVEYOR_PWM_CHANNEL                   TIM_CHANNEL_3
+#define CONVEYOR_MOTOR_MIN_PWM                 30U
+#define CONVEYOR_DEFAULT_SPEED_PWM             70U
+#define CONVEYOR_MIN_SPEED_PWM                 30U
+#define CONVEYOR_SPEED_STEP_PWM                 5U
+
+/* Short end-to-end hardware test: move to the heater, energize it briefly,
+ * continue to the end sensor, then automatically sweep the PCB to PASS. */
+#define CONVEYOR_E2E_HEATER_DUTY_PERCENT       25U
+#define CONVEYOR_E2E_HEATING_DURATION_MS     5000UL
+#define CONVEYOR_E2E_AUTO_SWEEP_DELAY_MS       500UL
+
+#define CONVEYOR_IR_PORT                       CONVEYOR_IR_GPIO_Port
+#define CONVEYOR_IR_PIN                        CONVEYOR_IR_Pin
+#define CONVEYOR_IR_ACTIVE_LOW                  1U
+
+#define CONVEYOR_SERVO_TIM                     (&htim2)
+#define CONVEYOR_SERVO_CHANNEL                 TIM_CHANNEL_2
+#define CONVEYOR_SERVO_LEFT_US                 1000U
+#define CONVEYOR_SERVO_CENTER_US               1500U
+#define CONVEYOR_SERVO_RIGHT_US                2000U
+#define CONVEYOR_SERVO_STEP_MS                  500UL
+
+/* 16.25 cm / 6.5 cm wheel circumference * 20 slots = 50 pulses. */
+#define CONVEYOR_HEATER_POSITION_PULSES          500UL
+#define CONVEYOR_MOVE_TIMEOUT_MS              15000UL
+#define CONVEYOR_HEATER_TIMEOUT_MS            10000UL
+#define CONVEYOR_IR_TIMEOUT_MS                30000UL
+#define CONVEYOR_INSPECTION_FALLBACK_MS        7000UL
+#define CONVEYOR_TASK_INTERVAL_MS                10UL
+#define CONVEYOR_SEQUENCE_INTERVAL_MS            50UL
+
+#endif /* CONVEYOR_CONFIG_H */

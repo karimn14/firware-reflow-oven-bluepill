@@ -1,8 +1,10 @@
 #include "cdc_console.h"
 
 #include "FreeRTOS.h"
+#include "conveyor_app.h"
 #include "hardware_test.h"
 #include "heater_characterization.h"
+#include "inspection.h"
 #include "task.h"
 #include "text_format.h"
 #include "usbd_cdc_if.h"
@@ -97,6 +99,10 @@ static const char *screen_name(HardwareTestScreen screen)
       return "reflow";
     case HARDWARE_TEST_SCREEN_CHARACTERIZATION:
       return "heater-characterization";
+    case HARDWARE_TEST_SCREEN_MOTOR_TEST:
+      return "motor-test";
+    case HARDWARE_TEST_SCREEN_CONVEYOR:
+      return "conveyor";
     default:
       return "unknown";
   }
@@ -105,6 +111,8 @@ static const char *screen_name(HardwareTestScreen screen)
 static void console_print_status(void)
 {
   HardwareTestStatus status;
+  ConveyorAppStatus conveyor;
+  InspectionStatus inspection;
   char response[192];
   int16_t setpoint_magnitude;
 
@@ -142,6 +150,18 @@ static void console_print_status(void)
         (status.pid_setpoint_tenths < 0) ? "-" : "",
         setpoint_magnitude / 10, setpoint_magnitude % 10);
   }
+  console_write_text(response);
+  ConveyorApp_GetStatus(&conveyor);
+  Inspection_GetStatus(&inspection);
+  (void)TextFormat(response, sizeof(response),
+      "conveyor=%s motor=%u%% speed=%u%% position=%lu/%lu ir=%s "
+      "pcb=%lu inspection=%u pass=%u fail=%u\r\n",
+      ConveyorSequencer_StateName(conveyor.state), conveyor.motor_percent,
+      conveyor.speed_percent, (unsigned long)conveyor.current_pulses,
+      (unsigned long)conveyor.target_pulses,
+      conveyor.ir_detected ? "detected" : "clear",
+      (unsigned long)inspection.board_id, (unsigned int)inspection.state,
+      inspection.pass_count, inspection.fail_count);
   console_write_text(response);
 }
 
@@ -194,6 +214,11 @@ static void console_execute(char *command)
     *--end = '\0';
   }
 
+  if (Inspection_HandleCdcLine(command) != 0U)
+  {
+    return;
+  }
+
   if (strcmp(command, "help") == 0)
   {
     console_write_text(
@@ -202,7 +227,8 @@ static void console_execute(char *command)
         "  ping         test the connection\r\n"
         "  info         show firmware information\r\n"
         "  status       show sensor and controller status\r\n"
-        "  echo <text>  return text to the host\r\n");
+        "  echo <text>  return text to the host\r\n"
+        "Protocol: $RESULT,id=<n>,PASS|FAIL*CS\r\n");
   }
   else if (strcmp(command, "ping") == 0)
   {
@@ -226,6 +252,24 @@ static void console_execute(char *command)
   else if (*command != '\0')
   {
     console_write_text("Unknown command. Type 'help'.\r\n");
+  }
+}
+
+static void console_send_inspection_request(void)
+{
+  uint32_t board_id;
+  char frame[48];
+  size_t length;
+
+  if ((terminal_connected == 0U)
+      || (Inspection_TakeRequest(&board_id) == 0U))
+  {
+    return;
+  }
+  length = Inspection_FormatRequest(frame, sizeof(frame), board_id);
+  if (length < sizeof(frame))
+  {
+    (void)console_write(frame, (uint16_t)length);
   }
 }
 
@@ -268,6 +312,7 @@ void CDC_Console_Task(void *argument)
   uint32_t seen_characterization_session = 0U;
   uint32_t seen_characterization_sequence = 0U;
   uint8_t previous_was_cr = 0U;
+  uint8_t protocol_line = 0U;
 
   (void)argument;
   for (;;)
@@ -279,6 +324,7 @@ void CDC_Console_Task(void *argument)
       seen_connection = connection_generation;
       command_length = 0U;
       previous_was_cr = 0U;
+      protocol_line = 0U;
       seen_characterization_session = 0U;
       seen_characterization_sequence = 0U;
       console_print_welcome();
@@ -302,11 +348,18 @@ void CDC_Console_Task(void *argument)
           continue;
         }
         previous_was_cr = (value == '\r') ? 1U : 0U;
-        console_write_text("\r\n");
+        if (protocol_line == 0U)
+        {
+          console_write_text("\r\n");
+        }
         command[command_length] = '\0';
         console_execute(command);
         command_length = 0U;
-        console_print_prompt();
+        if (protocol_line == 0U)
+        {
+          console_print_prompt();
+        }
+        protocol_line = 0U;
       }
       else if ((value == 0x08U) || (value == 0x7fU))
       {
@@ -320,10 +373,17 @@ void CDC_Console_Task(void *argument)
       else if ((value >= 0x20U) && (value <= 0x7eU))
       {
         previous_was_cr = 0U;
+        if ((command_length == 0U) && (value == '$'))
+        {
+          protocol_line = 1U;
+        }
         if (command_length < (CDC_COMMAND_SIZE - 1U))
         {
           command[command_length++] = (char)value;
-          (void)console_write((const char *)&value, 1U);
+          if (protocol_line == 0U)
+          {
+            (void)console_write((const char *)&value, 1U);
+          }
         }
         else
         {
@@ -333,6 +393,7 @@ void CDC_Console_Task(void *argument)
         }
       }
     }
+    console_send_inspection_request();
     console_print_characterization_log(&seen_characterization_session,
                                        &seen_characterization_sequence);
     vTaskDelay(pdMS_TO_TICKS(5U));

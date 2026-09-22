@@ -49,6 +49,18 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
+  /* Conveyor inspection sensor: active-low digital input. */
+  GPIO_InitStruct.Pin = CONVEYOR_IR_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(CONVEYOR_IR_GPIO_Port, &GPIO_InitStruct);
+
+  /* Single-channel conveyor encoder, one count per rising edge. */
+  GPIO_InitStruct.Pin = CONVEYOR_ENCODER_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(CONVEYOR_ENCODER_GPIO_Port, &GPIO_InitStruct);
+
   /*Configure GPIO pins : BTN_A_Pin BTN_B_Pin BTN_C_Pin BTN_D_Pin */
   GPIO_InitStruct.Pin = BTN_A_Pin|BTN_B_Pin|BTN_C_Pin|BTN_D_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
@@ -58,6 +70,8 @@ void MX_GPIO_Init(void)
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
 }
 

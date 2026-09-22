@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "FreeRTOS.h"
+#include "encoder.h"
 #include "task.h"
 /* USER CODE END Includes */
 
@@ -216,6 +217,15 @@ void SysTick_Handler(void)
   if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
   {
     xPortSysTickHandler();
+  }
+}
+
+void EXTI9_5_IRQHandler(void)
+{
+  if (__HAL_GPIO_EXTI_GET_IT(CONVEYOR_ENCODER_Pin) != RESET)
+  {
+    __HAL_GPIO_EXTI_CLEAR_IT(CONVEYOR_ENCODER_Pin);
+    ConveyorEncoder_OnPulseISR();
   }
 }
 

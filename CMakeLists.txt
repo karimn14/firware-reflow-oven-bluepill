@@ -48,9 +48,18 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/cdc_console.c
+    Core/Src/conveyor.c
+    Core/Src/conveyor_app.c
+    Core/Src/conveyor_sequencer.c
+    Core/Src/encoder.c
     Core/Src/hardware_test.c
     Core/Src/heater_characterization.c
+    Core/Src/inspection.c
+    Core/Src/motor.c
+    Core/Src/pcb_sensor.c
+    Core/Src/process_interlock.c
     Core/Src/reflow.c
+    Core/Src/servo.c
     Core/Src/ssd1306.c
     Core/Src/text_format.c
     Core/Src/thermistor.c

@@ -69,7 +69,7 @@
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configUSE_TRACE_FACILITY                 0
 #define configUSE_16_BIT_TICKS                   0
-#define configUSE_MUTEXES                        0
+#define configUSE_MUTEXES                        1
 #define configQUEUE_REGISTRY_SIZE                0
 #define configUSE_RECURSIVE_MUTEXES              0
 #define configUSE_COUNTING_SEMAPHORES            0
@@ -96,7 +96,7 @@ to exclude the API function. */
 #define INCLUDE_vTaskDelay                  1
 #define INCLUDE_xTaskGetSchedulerState      1
 #define INCLUDE_xTimerPendFunctionCall      1
-#define INCLUDE_xQueueGetMutexHolder        1
+#define INCLUDE_xQueueGetMutexHolder        0
 #define INCLUDE_uxTaskGetStackHighWaterMark 1
 #define INCLUDE_xTaskGetCurrentTaskHandle   1
 #define INCLUDE_eTaskGetState               1

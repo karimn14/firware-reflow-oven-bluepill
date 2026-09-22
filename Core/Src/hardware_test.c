@@ -1,10 +1,13 @@
 #include "hardware_test.h"
 
 #include "adc.h"
+#include "conveyor_app.h"
 #include "gpio.h"
 #include "heater_characterization.h"
 #include "i2c.h"
+#include "inspection.h"
 #include "main.h"
+#include "process_interlock.h"
 #include "reflow.h"
 #include "ssd1306.h"
 #include "text_format.h"
@@ -40,6 +43,10 @@
 #define REFLOW_REPEAT_RATE_MS        100U
 #define REFLOW_TEMPERATURE_STEP_TENTHS 10
 #define CHARACTERIZATION_EXIT_HOLD_MS 1500U
+#define CONVEYOR_EXIT_HOLD_MS         1500U
+#define MOTOR_TEST_DEFAULT_DUTY          40U
+#define MOTOR_TEST_MIN_DUTY              30U
+#define MOTOR_TEST_DUTY_STEP             10U
 
 typedef struct
 {
@@ -59,7 +66,9 @@ typedef enum
   SCREEN_THERMISTOR_CALIBRATION,
   SCREEN_PID,
   SCREEN_REFLOW,
-  SCREEN_CHARACTERIZATION
+  SCREEN_CHARACTERIZATION,
+  SCREEN_MOTOR_TEST,
+  SCREEN_CONVEYOR
 } Screen;
 
 static SSD1306_HandleTypeDef oled;
@@ -104,6 +113,11 @@ static uint8_t characterization_d_armed;
 static uint8_t characterization_d_press_active;
 static uint8_t characterization_d_long_handled;
 static uint32_t characterization_d_pressed_at;
+static uint8_t motor_test_duty_percent = MOTOR_TEST_DEFAULT_DUTY;
+static uint8_t conveyor_d_armed;
+static uint8_t conveyor_d_press_active;
+static uint8_t conveyor_d_long_handled;
+static uint32_t conveyor_d_pressed_at;
 
 static void adjust_pid_setpoint(int16_t change_tenths);
 
@@ -206,6 +220,10 @@ static void set_heater_output(void)
 {
   uint32_t compare = 0U;
 
+  if (ProcessInterlock_GetOwner() == PROCESS_OWNER_CONVEYOR)
+  {
+    heater_enabled = 0U;
+  }
   if (heater_enabled != 0U)
   {
     compare = ((uint32_t)__HAL_TIM_GET_AUTORELOAD(&htim3) + 1U)
@@ -264,7 +282,8 @@ static uint8_t pid_start(void)
 {
   float measurement;
 
-  if ((latest_temperature_valid == 0U)
+  if ((ProcessInterlock_GetOwner() == PROCESS_OWNER_CONVEYOR)
+      || (latest_temperature_valid == 0U)
       || (Thermistor_IsCalibrated() == 0U)
       || (latest_temperature_tenths >= PID_SAFETY_LIMIT_TENTHS))
   {
@@ -494,7 +513,8 @@ static void update_calibration_heater_button(void)
       {
         heater_enabled = 0U;
       }
-      else if ((latest_temperature_valid != 0U)
+      else if ((ProcessInterlock_GetOwner() != PROCESS_OWNER_CONVEYOR)
+               && (latest_temperature_valid != 0U)
                && (latest_temperature_tenths
                    < CALIBRATION_MAX_TEMP_TENTHS))
       {
@@ -524,6 +544,22 @@ static void enter_characterization_screen(void)
   characterization_d_armed = 0U;
   characterization_d_press_active = 0U;
   characterization_d_long_handled = 0U;
+}
+
+static void enter_conveyor_screen(void)
+{
+  ConveyorApp_ManualMotorStop();
+  current_screen = SCREEN_CONVEYOR;
+  conveyor_d_armed = 0U;
+  conveyor_d_press_active = 0U;
+  conveyor_d_long_handled = 0U;
+}
+
+static void enter_motor_test_screen(void)
+{
+  HeaterCharacterization_RequestStop();
+  HardwareTest_HeaterStop();
+  current_screen = SCREEN_MOTOR_TEST;
 }
 
 static void update_reflow_navigation_button(void)
@@ -572,14 +608,6 @@ static void update_reflow_navigation_button(void)
   }
 }
 
-static void leave_characterization_screen(void)
-{
-  HeaterCharacterization_RequestStop();
-  HardwareTest_HeaterStop();
-  heater_duty_percent = heater_manual_duty_percent;
-  current_screen = SCREEN_HEATER;
-}
-
 static void update_characterization_navigation_button(void)
 {
   uint8_t pressed;
@@ -612,13 +640,57 @@ static void update_characterization_navigation_button(void)
                  >= CHARACTERIZATION_EXIT_HOLD_MS))
     {
       characterization_d_long_handled = 1U;
-      leave_characterization_screen();
+      enter_motor_test_screen();
     }
   }
   else if (characterization_d_press_active != 0U)
   {
     characterization_d_press_active = 0U;
     characterization_d_long_handled = 0U;
+  }
+}
+
+static void update_conveyor_navigation_button(void)
+{
+  uint8_t pressed;
+
+  if (current_screen != SCREEN_CONVEYOR)
+  {
+    return;
+  }
+  pressed = buttons[3].stable_pressed;
+  if (conveyor_d_armed == 0U)
+  {
+    if (pressed == 0U)
+    {
+      conveyor_d_armed = 1U;
+    }
+    return;
+  }
+  if (pressed != 0U)
+  {
+    if (conveyor_d_press_active == 0U)
+    {
+      conveyor_d_press_active = 1U;
+      conveyor_d_long_handled = 0U;
+      conveyor_d_pressed_at = HAL_GetTick();
+    }
+    else if ((conveyor_d_long_handled == 0U)
+             && ((HAL_GetTick() - conveyor_d_pressed_at)
+                 >= CONVEYOR_EXIT_HOLD_MS))
+    {
+      conveyor_d_long_handled = 1U;
+      current_screen = SCREEN_HEATER;
+    }
+  }
+  else if (conveyor_d_press_active != 0U)
+  {
+    if (conveyor_d_long_handled == 0U)
+    {
+      ConveyorApp_CenterServo();
+    }
+    conveyor_d_press_active = 0U;
+    conveyor_d_long_handled = 0U;
   }
 }
 
@@ -637,7 +709,11 @@ static void update_controls(void)
       switch (i)
       {
         case 0U:
-          heater_enabled ^= 1U;
+          if ((heater_enabled != 0U)
+              || (ProcessInterlock_GetOwner() != PROCESS_OWNER_CONVEYOR))
+          {
+            heater_enabled ^= 1U;
+          }
           break;
         case 1U:
           if (heater_manual_duty_percent <= (100U - HEATER_DUTY_STEP))
@@ -752,7 +828,7 @@ static void update_controls(void)
           break;
       }
     }
-    else
+    else if (current_screen == SCREEN_CHARACTERIZATION)
     {
       switch (i)
       {
@@ -775,6 +851,92 @@ static void update_controls(void)
         case 3U:
           /* Hold action is resolved by the navigation handler. */
           break;
+        default:
+          break;
+      }
+    }
+    else if (current_screen == SCREEN_MOTOR_TEST)
+    {
+      ConveyorAppStatus conveyor;
+      ConveyorApp_GetStatus(&conveyor);
+      switch (i)
+      {
+        case 0U:
+          if (conveyor.manual_test_active != 0U)
+          {
+            ConveyorApp_ManualMotorStop();
+          }
+          else
+          {
+            (void)ConveyorApp_ManualMotorStart(motor_test_duty_percent);
+          }
+          break;
+        case 1U:
+          if (motor_test_duty_percent <= (100U - MOTOR_TEST_DUTY_STEP))
+          {
+            motor_test_duty_percent += MOTOR_TEST_DUTY_STEP;
+          }
+          ConveyorApp_ManualMotorSetDuty(motor_test_duty_percent);
+          break;
+        case 2U:
+          if (motor_test_duty_percent
+              >= (MOTOR_TEST_MIN_DUTY + MOTOR_TEST_DUTY_STEP))
+          {
+            motor_test_duty_percent -= MOTOR_TEST_DUTY_STEP;
+          }
+          ConveyorApp_ManualMotorSetDuty(motor_test_duty_percent);
+          break;
+        case 3U:
+          enter_conveyor_screen();
+          break;
+        default:
+          break;
+      }
+    }
+    else
+    {
+      ConveyorAppStatus conveyor;
+      ConveyorApp_GetStatus(&conveyor);
+      switch (i)
+      {
+        case 0U:
+          if (conveyor.state == CONVEYOR_SEQ_IDLE)
+          {
+            (void)ConveyorApp_RequestStart();
+          }
+          else if ((conveyor.state == CONVEYOR_SEQ_ESTOP)
+                   || (conveyor.state == CONVEYOR_SEQ_MOTOR_FAULT)
+                   || (conveyor.state == CONVEYOR_SEQ_PCB_TIMEOUT)
+                   || (conveyor.state == CONVEYOR_SEQ_HEATER_FAULT))
+          {
+            ConveyorApp_AcknowledgeFault();
+          }
+          else
+          {
+            ConveyorApp_RequestAbort();
+          }
+          break;
+        case 1U:
+          if (conveyor.state == CONVEYOR_SEQ_INSPECTION)
+          {
+            Inspection_SubmitManualResult(1U);
+          }
+          else
+          {
+            ConveyorApp_AdjustSpeed(1);
+          }
+          break;
+        case 2U:
+          if (conveyor.state == CONVEYOR_SEQ_INSPECTION)
+          {
+            Inspection_SubmitManualResult(0U);
+          }
+          else
+          {
+            ConveyorApp_AdjustSpeed(-1);
+          }
+          break;
+        case 3U:
         default:
           break;
       }
@@ -968,6 +1130,8 @@ static const char *reflow_state_name(ReflowState state)
       return "SOAKING";
     case REFLOW_STATE_REFLOW:
       return "REFLOW";
+    case REFLOW_STATE_TIMED_TEST:
+      return "TEST-HEAT";
     case REFLOW_STATE_COOLING:
       return "COOLING";
     case REFLOW_STATE_IDLE:
@@ -1165,11 +1329,106 @@ static void draw_characterization_screen(void)
                    (unsigned long)(status.elapsed_ms / 1000UL),
                    characterization_fault_name(status.fault));
   SSD1306_DrawString(&oled, 0U, 5U, line);
-  SSD1306_DrawString(&oled, 0U, 6U, "D-HOLD:BACK");
+  SSD1306_DrawString(&oled, 0U, 6U, "D-HOLD:NEXT");
   SSD1306_DrawString(&oled, 0U, 7U,
                      HeaterCharacterization_IsRunning()
                      ? "A:STOP AUTO LOGGING"
                      : "A:RUN B:+25 C:-25");
+}
+
+static const char *inspection_state_name(InspectionState state)
+{
+  switch (state)
+  {
+    case INSPECTION_REQUESTING: return "SEND";
+    case INSPECTION_WAITING: return "WAIT";
+    case INSPECTION_PASS: return "PASS";
+    case INSPECTION_FAIL: return "FAIL";
+    case INSPECTION_TIMEOUT: return "TIMEOUT";
+    case INSPECTION_PROTOCOL_ERROR: return "PROTO-ERR";
+    case INSPECTION_IDLE:
+    default: return "IDLE";
+  }
+}
+
+static const char *process_owner_name(ProcessOwner owner)
+{
+  if (owner == PROCESS_OWNER_CONVEYOR)
+  {
+    return "BELT";
+  }
+  if (owner == PROCESS_OWNER_HEATER)
+  {
+    return "HEAT";
+  }
+  return "FREE";
+}
+
+static void draw_motor_test_screen(void)
+{
+  ConveyorAppStatus conveyor;
+  char line[22];
+
+  ConveyorApp_GetStatus(&conveyor);
+  SSD1306_DrawString(&oled, 0U, 0U, "DC MOTOR TEST");
+  (void)TextFormat(line, sizeof(line), "STATE: %s",
+                   conveyor.manual_test_active ? "RUNNING" : "STOPPED");
+  SSD1306_DrawString(&oled, 0U, 2U, line);
+  (void)TextFormat(line, sizeof(line), "PWM  : %3u%%", motor_test_duty_percent);
+  SSD1306_DrawString(&oled, 0U, 3U, line);
+  (void)TextFormat(line, sizeof(line), "PULSE: %lu",
+                   (unsigned long)conveyor.current_pulses);
+  SSD1306_DrawString(&oled, 0U, 4U, line);
+  SSD1306_DrawString(&oled, 0U, 6U, "A:START / STOP");
+  SSD1306_DrawString(&oled, 0U, 7U, "B:+10 C:-10 D:NEXT");
+}
+
+static void draw_conveyor_screen(void)
+{
+  ConveyorAppStatus conveyor;
+  InspectionStatus inspection;
+  char line[22];
+
+  ConveyorApp_GetStatus(&conveyor);
+  Inspection_GetStatus(&inspection);
+  (void)TextFormat(line, sizeof(line), "CV:%s %lus",
+                   ConveyorSequencer_StateName(conveyor.state),
+                   (unsigned long)(conveyor.state_elapsed_ms / 1000UL));
+  SSD1306_DrawString(&oled, 0U, 0U, line);
+  (void)TextFormat(line, sizeof(line), "M:%3u%% SET:%3u%%",
+                   conveyor.motor_percent, conveyor.speed_percent);
+  SSD1306_DrawString(&oled, 0U, 1U, line);
+  (void)TextFormat(line, sizeof(line), "POS:%lu/%lu IR:%s",
+                   (unsigned long)conveyor.current_pulses,
+                   (unsigned long)conveyor.target_pulses,
+                   conveyor.ir_detected ? "YES" : "NO");
+  SSD1306_DrawString(&oled, 0U, 2U, line);
+  (void)TextFormat(line, sizeof(line), "LOCK:%s SER:%uus",
+                   process_owner_name(conveyor.process_owner),
+                   conveyor.servo_pulse_us);
+  SSD1306_DrawString(&oled, 0U, 3U, line);
+  (void)TextFormat(line, sizeof(line), "PCB:%lu INSP:%s",
+                   (unsigned long)inspection.board_id,
+                   inspection_state_name(inspection.state));
+  SSD1306_DrawString(&oled, 0U, 4U, line);
+  (void)TextFormat(line, sizeof(line), "PASS:%u FAIL:%u",
+                   inspection.pass_count, inspection.fail_count);
+  SSD1306_DrawString(&oled, 0U, 5U, line);
+  SSD1306_DrawString(&oled, 0U, 6U,
+                     (conveyor.state == CONVEYOR_SEQ_INSPECTION)
+                     ? "B:PASS C:FAIL"
+                     : ((conveyor.state == CONVEYOR_SEQ_IDLE)
+                        ? "B:SPEED+ C:SPEED-"
+                        : "CONTROLS LOCKED"));
+  SSD1306_DrawString(&oled, 0U, 7U,
+                     (conveyor.state == CONVEYOR_SEQ_IDLE)
+                     ? "A:START D-HOLD:BACK"
+                     : (((conveyor.state == CONVEYOR_SEQ_ESTOP)
+                         || (conveyor.state == CONVEYOR_SEQ_MOTOR_FAULT)
+                         || (conveyor.state == CONVEYOR_SEQ_PCB_TIMEOUT)
+                         || (conveyor.state == CONVEYOR_SEQ_HEATER_FAULT))
+                        ? "A:ACK D-HOLD:BACK"
+                        : "A:ABORT D-HOLD:BACK"));
 }
 
 void HardwareTest_Init(void)
@@ -1188,7 +1447,9 @@ void HardwareTest_Init(void)
   latest_adc = read_adc_average();
   latest_temperature_valid = Thermistor_Calculate(
       latest_adc, &latest_temperature_tenths, &latest_resistance_ohm);
-  current_screen = SCREEN_HEATER;
+  /* Open the end-to-end conveyor test after boot. All actuators remain OFF
+   * until button A is pressed. */
+  current_screen = SCREEN_CONVEYOR;
   oled_ready = (SSD1306_Init(&oled, &hi2c1, OLED_ADDRESS_7BIT) == HAL_OK)
                ? 1U : 0U;
   last_display_update = HAL_GetTick() - DISPLAY_UPDATE_MS;
@@ -1213,6 +1474,7 @@ void HardwareTest_InputRun(void)
   update_calibration_heater_button();
   update_reflow_navigation_button();
   update_characterization_navigation_button();
+  update_conveyor_navigation_button();
   update_button_auto_repeat();
   update_pid_controller();
   enforce_direct_heater_safety();
@@ -1268,9 +1530,17 @@ void HardwareTest_Run(void)
     {
       draw_reflow_screen();
     }
-    else
+    else if (current_screen == SCREEN_CHARACTERIZATION)
     {
       draw_characterization_screen();
+    }
+    else if (current_screen == SCREEN_MOTOR_TEST)
+    {
+      draw_motor_test_screen();
+    }
+    else
+    {
+      draw_conveyor_screen();
     }
 
     if (SSD1306_Update(&oled) != HAL_OK)
@@ -1334,7 +1604,8 @@ uint8_t HardwareTest_HeaterStartAtDuty(uint8_t duty,
                                        int16_t safety_limit_tenths)
 {
   pid_stop(0U);
-  if ((duty == 0U) || (duty > 100U)
+  if ((ProcessInterlock_GetOwner() == PROCESS_OWNER_CONVEYOR)
+      || (duty == 0U) || (duty > 100U)
       || (safety_limit_tenths <= 0)
       || (latest_temperature_valid == 0U)
       || (Thermistor_IsCalibrated() == 0U)

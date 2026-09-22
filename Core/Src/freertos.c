@@ -26,7 +26,10 @@
 /* USER CODE BEGIN Includes */
 #include "hardware_test.h"
 #include "cdc_console.h"
+#include "conveyor_app.h"
 #include "heater_characterization.h"
+#include "inspection.h"
+#include "process_interlock.h"
 #include "reflow.h"
 #include "tim.h"
 
@@ -58,6 +61,12 @@ TaskHandle_t cdcTaskHandle;
 static StaticTask_t reflowTaskControlBlock;
 static StackType_t reflowTaskStack[96];
 TaskHandle_t reflowTaskHandle;
+static StaticTask_t conveyorTaskControlBlock;
+static StackType_t conveyorTaskStack[96];
+TaskHandle_t conveyorTaskHandle;
+static StaticTask_t inspectionTaskControlBlock;
+static StackType_t inspectionTaskStack[96];
+TaskHandle_t inspectionTaskHandle;
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -72,6 +81,8 @@ static StackType_t idleTaskStack[configMINIMAL_STACK_SIZE];
 void StartInputTask(void *argument);
 void StartCdcTask(void *argument);
 void StartReflowTask(void *argument);
+void StartConveyorAppTask(void *argument);
+void StartInspectionTask(void *argument);
 
 /* USER CODE END FunctionPrototypes */
 
@@ -87,8 +98,11 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
+  ProcessInterlock_Init();
   Reflow_Init();
   HeaterCharacterization_Init();
+  ConveyorApp_Init();
+  Inspection_Init();
 
   /* USER CODE END Init */
 
@@ -124,6 +138,12 @@ void MX_FREERTOS_Init(void) {
   reflowTaskHandle = xTaskCreateStatic(StartReflowTask, "thermalTask",
       sizeof(reflowTaskStack) / sizeof(reflowTaskStack[0]), NULL, 2U,
       reflowTaskStack, &reflowTaskControlBlock);
+  conveyorTaskHandle = xTaskCreateStatic(StartConveyorAppTask, "conveyorTask",
+      sizeof(conveyorTaskStack) / sizeof(conveyorTaskStack[0]), NULL, 2U,
+      conveyorTaskStack, &conveyorTaskControlBlock);
+  inspectionTaskHandle = xTaskCreateStatic(StartInspectionTask, "inspectionTask",
+      sizeof(inspectionTaskStack) / sizeof(inspectionTaskStack[0]), NULL, 1U,
+      inspectionTaskStack, &inspectionTaskControlBlock);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -178,6 +198,16 @@ void StartReflowTask(void *argument)
   Reflow_Task(argument);
 }
 
+void StartConveyorAppTask(void *argument)
+{
+  ConveyorApp_Task(argument);
+}
+
+void StartInspectionTask(void *argument)
+{
+  Inspection_Task(argument);
+}
+
 void vApplicationGetIdleTaskMemory(StaticTask_t **task_buffer,
                                    StackType_t **stack_buffer,
                                    uint32_t *stack_size)
@@ -192,6 +222,7 @@ void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)
   (void)task;
   (void)task_name;
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
+  __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0U);
   taskDISABLE_INTERRUPTS();
   for (;;)
   {

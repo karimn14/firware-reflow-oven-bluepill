@@ -42,13 +42,16 @@ Tool tersebut dapat digunakan untuk membantu menyiapkan integrasi project STM32 
 - Profil PCB reflow POC otomatis dengan tahap preheat, soaking, reflow, dan cooling; target puncak dibatasi 120 °C.
 - Halaman OLED reflow dengan status tahap, target, output heater, waktu proses, dan grafik suhu bergulir.
 - Mode karakterisasi heater otomatis dengan duty tetap, cutoff 110 °C, pengukuran °C/s, overshoot, cooling, dan log CSV USB.
+- Sequencer conveyor otomatis dari LOAD → HEAT → INSPECT → SORT, dengan encoder, sensor IR, dan timeout fail-safe.
+- Interlock mutex FreeRTOS yang mencegah motor conveyor dan profil heater menguasai plant pada saat bersamaan.
+- Inspeksi PCB melalui USB CDC ke Raspberry Pi dan servo sorting PASS ke kanan atau FAIL/timeout ke kiri.
 - Proteksi heater pada 150 °C untuk PID, 125 °C untuk reflow POC, dan 110 °C untuk karakterisasi.
 - Antarmuka OLED 128×64 berbasis SSD1306 melalui I2C 400 kHz.
 - Empat tombol aktif-low dengan pull-up internal, debounce, dan auto-repeat.
 - USB Full Speed sebagai Virtual COM Port (CDC).
 - Console interaktif USB CDC untuk PuTTY, `screen`, atau serial monitor lain.
 - Masuk ke HID bootloader melalui reset yang dipicu oleh utilitas flashing pada port USB CDC.
-- FreeRTOS dengan task terpisah untuk input/kendali, sensor/display, sequencer thermal reflow/karakterisasi, dan console USB CDC.
+- FreeRTOS dengan task statis untuk input/kendali, sensor/display, thermal, conveyor, inspeksi, dan console USB CDC.
 
 ## Hardware
 
@@ -61,21 +64,28 @@ Komponen utama yang digunakan:
 - Resistor tetap 4,7 kΩ untuk pembagi tegangan thermistor.
 - SSR atau driver heater dengan input logika yang sesuai untuk sinyal 3,3 V.
 - Empat push button.
+- Conveyor belt, motor DC, driver/H-bridge dengan input PWM, dan encoder optik satu kanal.
+- Sensor IR aktif-low untuk mendeteksi PCB di posisi inspeksi.
+- Servo 50 Hz untuk menyortir PCB ke sisi PASS atau FAIL.
+- Catu daya motor dan servo yang terpisah dari regulator 3,3 V Blue Pill, dengan common ground.
 - USB data cable untuk CDC dan HID bootloader.
 - ST-Link atau programmer lain untuk pemasangan awal bootloader.
 
-Output fan dan DC motor telah dialokasikan pada pin dan kanal timer, tetapi program aplikasi saat ini hanya memulai serta mengubah PWM heater pada TIM3 channel 1.
+Nilai posisi encoder, deadband motor, duty conveyor, dan pulse servo pada firmware adalah nilai awal POC. Semuanya harus dikalibrasi terhadap mekanik dan catu daya yang sebenarnya sebelum conveyor dijalankan dengan PCB.
 
 ## Pin mapping
 
 | Fungsi | Pin MCU | Peripheral | Konfigurasi/keterangan |
 |---|---:|---|---|
 | Thermistor | PA0 | ADC1 IN0 | Input analog, 12-bit |
+| Servo sorter | PA1 | TIM2 CH2 | PWM 50 Hz, 1 µs/tick; 1000/1500/2000 µs |
 | PWM heater / SSR | PA6 | TIM3 CH1 | PWM 1 Hz, aktif-high; digunakan aplikasi |
 | PWM fan | PA7 | TIM3 CH2 | PWM 1 Hz; baru dikonfigurasi, belum dijalankan aplikasi |
-| PWM DC motor | PB0 | TIM3 CH3 | PWM 1 Hz; baru dikonfigurasi, belum dijalankan aplikasi |
+| Encoder conveyor | PA8 | EXTI8 | Input rising-edge, pull-down, encoder satu kanal |
+| Sensor IR PCB | PB1 | GPIO input | Aktif-low, pull-up, debounce 150 ms |
 | OLED SCL | PB6 | I2C1 SCL | 400 kHz, open-drain |
 | OLED SDA | PB7 | I2C1 SDA | 400 kHz, open-drain |
+| PWM DC motor | PB8 | TIM4 CH3 | PWM 20 kHz, aktif-high, arah motor diatur hardware |
 | UART TX | PB10 | USART3 TX | 115200, 8-N-1; belum digunakan logika aplikasi |
 | UART RX | PB11 | USART3 RX | 115200, 8-N-1; belum digunakan logika aplikasi |
 | Tombol A | PB12 | GPIO/EXTI12 | Aktif-low, pull-up internal |
@@ -104,7 +114,20 @@ Topologi kebalikannya juga dapat dikenali setelah dua titik kalibrasi yang valid
 
 ## Cara menggunakan program
 
-Saat boot, output heater dipastikan 0%, ADC dikalibrasi, data kalibrasi thermistor dimuat dari flash, OLED diinisialisasi, lalu program membuka layar **SSR HEATER TEST**.
+Saat boot, output heater dan motor dipastikan 0%, ADC dikalibrasi, data kalibrasi thermistor dimuat dari flash, OLED diinisialisasi, lalu program membuka layar **CONVEYOR** untuk pengujian end-to-end. Tekan A untuk memulai; semua aktuator tetap mati sebelum tombol ditekan.
+
+### Mode pengujian motor DC (layar awal)
+
+Hubungkan input PWM driver motor ke **PB8 (TIM4 CH3)**. PWM berjalan pada 20 kHz. Motor wajib memakai driver/H-bridge dan catu daya terpisah; jangan menghubungkan motor langsung ke pin Blue Pill. Satukan ground driver dengan ground Blue Pill.
+
+| Tombol | Fungsi |
+|---|---|
+| A | Menjalankan/menghentikan motor |
+| B | Menaikkan duty cycle 10% |
+| C | Menurunkan duty cycle 10% |
+| D | Masuk ke halaman sequencer conveyor |
+
+Duty awal adalah 40% dan dapat diatur pada rentang 30–100%. Perubahan duty langsung diterapkan ketika motor sedang berjalan. OLED juga menampilkan jumlah pulsa encoder yang terbaca pada PA8. Motor selalu tetap mati saat boot dan ketika keluar dari halaman pengujian.
 
 ### 1. Mode pengujian heater
 
@@ -205,7 +228,7 @@ Tahan tombol D minimal 1,5 detik pada halaman reflow untuk membuka **HEATER CHAR
 | A | Memulai pengujian; saat pengujian aktif, menghentikan pengujian dan mematikan heater |
 | B | Menaikkan duty 25% |
 | C | Menurunkan duty 25% |
-| D ditahan ≥1,5 detik | Menghentikan pengujian dan kembali ke layar pengujian heater |
+| D ditahan ≥1,5 detik | Menghentikan pengujian dan membuka halaman uji motor DC |
 
 Duty bawaan adalah 25% dan dapat dipilih menjadi 25%, 50%, 75%, atau 100% ketika pengujian tidak aktif. Pengujian hanya dapat dimulai jika thermistor sudah dikalibrasi, sensor valid, dan suhu awal ≤50 °C.
 
@@ -230,20 +253,84 @@ Nilai suhu CSV menggunakan satuan sepersepuluh derajat Celsius; misalnya `875` b
 > [!IMPORTANT]
 > Mode karakterisasi mengurangi risiko kesalahan pencatatan, tetapi bukan pengaman kelistrikan atau termal independen. Gunakan thermal fuse/thermostat, sekering, isolasi, dan pemutus daya fisik yang sesuai.
 
+### 6. Uji end-to-end conveyor, pemanasan, inspeksi, dan servo
+
+Firmware conveyor diadaptasi dari `../sunda_reflow_oven/firmware/conveyor`. Versi sumber menargetkan STM32F411/CMSIS-RTOS; integrasi ini menggunakan STM32F103, native FreeRTOS API, task statis, encoder EXTI, dan timer yang tidak berbenturan dengan heater maupun OLED.
+
+Halaman **CONVEYOR** dibuka otomatis saat boot. Halaman ini juga dapat dicapai dengan menahan D minimal 1,5 detik dari halaman karakterisasi untuk membuka **DC MOTOR TEST**, lalu menekan D sekali. OLED menampilkan state, duty motor, target speed, posisi/target encoder, sensor IR, pemilik mutex, pulse servo, nomor PCB, status inspeksi, serta penghitung PASS/FAIL.
+
+| Tombol | Fungsi pada halaman conveyor |
+|---|---|
+| A pada `IDLE` | Memulai satu siklus otomatis |
+| A saat siklus aktif | Abort: heater dan motor dimatikan, state menjadi `ESTOP` |
+| A pada state fault | Acknowledge fault dan kembali ke `IDLE` |
+| B/C pada `IDLE` | Menaikkan/menurunkan duty motor 5% |
+| B/C saat `INSPECT` | Memasukkan hasil PASS/FAIL secara manual sebelum hasil otomatis dijalankan |
+| D singkat pada `IDLE` | Mengembalikan servo ke posisi tengah |
+| D ditahan ≥1,5 detik | Kembali ke halaman heater tanpa menghentikan siklus yang sedang berjalan |
+
+Urutan uji end-to-end satu siklus:
+
+1. `TO-MID`: conveyor mengambil mutex plant, menjalankan motor, lalu berhenti di tengah setelah target encoder 50 pulsa tercapai.
+2. `HEAT-5S`: conveyor melepas mutex. Task thermal mengambil mutex heater dan menyalakan heater pada duty 25% selama 5 detik.
+3. Setelah 5 detik, heater dimatikan dan task thermal melepas mutex.
+4. `TO-END`: conveyor mengambil mutex lagi dan bergerak sampai sensor IR di ujung mendeteksi PCB. Motor kemudian berhenti.
+5. `INSPECT`: task inspeksi dan jalur request USB CDC dijalankan. Untuk pengujian mandiri, hasil PASS otomatis diberikan setelah 500 ms jika belum ada hasil eksternal.
+6. `SWIPE-R`: servo menyapu PCB ke kanan selama 500 ms, kembali ke posisi tengah, lalu state kembali `IDLE`.
+
+Mutex plant hanya mempunyai satu pemilik pada satu waktu: `BELT`, `HEAT`, atau `FREE`. Output heater dipaksa mati ketika mutex sedang dimiliki conveyor. Uji pemanasan hanya dapat dimulai jika thermistor valid dan sudah dikalibrasi; sensor invalid, suhu mencapai 110 °C, atau timeout menghasilkan `HEAT-ERR` dan alur dihentikan.
+
+Konfigurasi awal conveyor berada di `Core/Inc/conveyor_config.h`:
+
+| Parameter | Nilai awal |
+|---|---:|
+| Duty motor | 70% |
+| Deadband minimum | 30% |
+| Target posisi heater | 50 pulse |
+| Duty/durasi uji heater | 25% / 5 detik |
+| Timeout gerak ke heater | 15 detik |
+| Timeout mencari sensor IR | 30 detik |
+| Hasil inspeksi otomatis | PASS setelah 500 ms |
+| Servo kiri/tengah/kanan | 1000/1500/2000 µs |
+
+#### Protokol inspeksi USB CDC
+
+Frame menggunakan ASCII satu baris. Checksum adalah XOR semua karakter di antara `$` dan `*`, ditulis sebagai dua digit heksadesimal. Raspberry Pi berperan sebagai USB host; konektor USB Blue Pill hanya dapat terhubung ke satu host pada satu waktu, jadi PC dan Raspberry Pi tidak dapat memakai link CDC yang sama secara bersamaan.
+
+STM32 meminta inspeksi:
+
+```text
+$INSPECT,id=1*7B
+```
+
+Raspberry Pi membalas salah satu:
+
+```text
+$RESULT,id=1,PASS*19
+$RESULT,id=1,FAIL*0A
+$RESULT,id=1,PASS,conf=0.94*1F
+```
+
+`id` hasil wajib sama dengan PCB yang sedang menunggu. Firmware menerima field tambahan setelah PASS/FAIL, sehingga confidence atau kode inspeksi dapat disertakan. Checksum balasan disarankan dan diverifikasi bila ada; frame tanpa checksum juga diterima untuk bring-up. Frame dengan checksum salah atau ID lama diabaikan. Pada mode uji end-to-end ini, respons valid yang tiba dalam 500 ms tetap digunakan; jika tidak ada respons, firmware membuat hasil PASS otomatis agar pengujian servo dapat selesai tanpa Raspberry Pi.
+
+> [!WARNING]
+> Motor dan servo tidak boleh disuplai dari pin 3,3 V Blue Pill. Gunakan driver dan supply terpisah dengan common ground, level logika yang aman, sekering, serta emergency stop fisik. Pastikan arah H-bridge benar sebelum menjalankan siklus karena firmware ini hanya mengatur duty, bukan arah.
+
 ## Optimasi RAM
 
-Firmware menggunakan alokasi task FreeRTOS statis dan tidak menggunakan heap FreeRTOS dinamis. Fitur FreeRTOS yang tidak digunakan, seperti software timer, mutex, dan counting semaphore, dinonaktifkan. Jumlah level prioritas disesuaikan menjadi empat sambil mempertahankan urutan prioritas task. Pemeriksaan stack overflow level 2 tetap aktif dan memaksa output heater menjadi 0 jika overflow terdeteksi.
+Firmware menggunakan alokasi task FreeRTOS statis dan tidak menggunakan heap FreeRTOS dinamis. Software timer dan counting semaphore tetap dinonaktifkan; hanya satu mutex statis yang diaktifkan untuk interlock heater–conveyor. Jumlah level prioritas disesuaikan menjadi empat sambil mempertahankan urutan prioritas task. Pemeriksaan stack overflow level 2 tetap aktif dan memaksa output heater dan motor menjadi 0 jika overflow terdeteksi.
 
 Buffer RX/TX USB CDC disesuaikan dengan ukuran maksimum paket Full Speed 64 byte, sedangkan ring buffer console 256 byte tetap dipertahankan. Riwayat grafik reflow tetap 128 sampel tetapi disimpan sebagai derajat terkuantisasi satu byte karena resolusi vertikal OLED hanya 32 piksel. Formatter teks ringan menggantikan `snprintf` pada UI dan console.
 
-Hasil build Release setelah karakterisasi ditambahkan:
+Hasil build Release setelah conveyor dan inspeksi ditambahkan:
 
 | Kondisi | RAM | Persentase RAM 20 KiB |
 |---|---:|---:|
 | Sebelum optimasi | 17.304 byte | 84,49% |
-| Setelah optimasi | 9.480 byte | 46,29% |
+| Setelah optimasi karakterisasi | 9.480 byte | 46,29% |
+| Setelah conveyor + inspeksi | 10.840 byte | 52,93% |
 
-Penggunaan RAM turun 7.824 byte tanpa menghapus task input, display, thermal control, USB CDC, PID, reflow, maupun grafik OLED. Konfigurasi RAM ini berada pada file generated seperti `freertos.c`, `FreeRTOSConfig.h`, dan konfigurasi USB; periksa kembali perubahan tersebut jika project diregenerasi dengan STM32CubeMX.
+Walaupun dua task statis, mutex, state machine conveyor, dan protokol inspeksi ditambahkan, penggunaan RAM masih 6.464 byte lebih rendah daripada kondisi awal 84,49%. Konfigurasi RAM ini berada pada file generated seperti `freertos.c`, `FreeRTOSConfig.h`, dan konfigurasi USB; periksa kembali perubahan tersebut jika project diregenerasi dengan STM32CubeMX.
 
 ## STM32 HID bootloader
 
@@ -335,11 +422,11 @@ Perintah yang tersedia:
 | `status` | Membaca layar aktif, heater, duty, ADC, suhu, resistansi, kalibrasi, PID, dan setpoint |
 | `echo <teks>` | Mengirim kembali teks ke host |
 
-Console saat ini bersifat read-only terhadap sistem kontrol: tidak tersedia perintah untuk menyalakan heater atau mengubah PID. Pembatasan ini disengaja agar membuka terminal tidak dapat mengaktifkan beban panas secara tidak sengaja.
+Command console tetap tidak dapat menyalakan heater atau mengubah PID. Frame `$RESULT` dengan ID PCB aktif hanya diterima ketika state conveyor sedang `INSPECTION`; efeknya terbatas pada pilihan arah servo sebelum fallback PASS otomatis dijalankan.
 
 Data USB diterima oleh callback CDC dan dimasukkan ke ring buffer 256 byte. Task `cdcTask` memproses command tanpa melakukan pekerjaan berat di dalam interrupt USB. Panjang maksimum satu command adalah 95 karakter.
 
-Selama karakterisasi heater aktif, task console juga mengirim satu baris CSV setiap detik. Console tetap menerima command, tetapi sebaiknya jangan mengetik selama perekaman agar file log mudah diproses.
+Selama karakterisasi heater aktif, task console juga mengirim satu baris CSV setiap detik. Saat inspeksi aktif, task yang sama mengirim frame `$INSPECT`. Program serial Raspberry Pi harus membuka DTR—perilaku bawaan `pyserial`—agar firmware menandai host terhubung dan mengirim request.
 
 ## Build firmware
 
@@ -396,9 +483,13 @@ Task flash mengubah ELF menjadi BIN terlebih dahulu, kemudian menjalankan `hid-f
 | Lokasi | Isi utama |
 |---|---|
 | `Core/Src/main.c` | Inisialisasi clock/peripheral, USB CDC awal, dan scheduler |
-| `Core/Src/freertos.c` | Pembuatan task statis input/kendali, hardware/display, thermal sequencer, dan console CDC |
-| `Core/Src/cdc_console.c` | Ring buffer RX, task console, parser command, dan respons USB CDC |
-| `Core/Src/hardware_test.c` | State layar, tombol, ADC, heater manual, kalibrasi, PID, serta UI reflow/karakterisasi |
+| `Core/Src/freertos.c` | Pembuatan task statis input, display, thermal, conveyor, inspeksi, dan console CDC |
+| `Core/Src/cdc_console.c` | Ring buffer RX, console, parser command/frame inspeksi, dan transmisi USB CDC |
+| `Core/Src/hardware_test.c` | State layar, tombol, ADC, heater, PID, serta UI reflow/karakterisasi/uji motor/conveyor |
+| `Core/Src/conveyor*.c` | Motion primitive, sequencer LOAD→HEAT→INSPECT→SORT, dan integrasi task |
+| `Core/Src/{encoder,motor,pcb_sensor,servo}.c` | Driver perangkat conveyor yang diadaptasi untuk STM32F103 |
+| `Core/Src/inspection.c` | Task request/retry/timeout dan parser hasil inspeksi Raspberry Pi |
+| `Core/Src/process_interlock.c` | Mutex statis pemisah ownership conveyor dan heater |
 | `Core/Src/heater_characterization.c` | State machine karakterisasi, cutoff, perhitungan laju, overshoot, dan sampel CSV |
 | `Core/Src/reflow.c` | State machine dan task profil preheat, soaking, reflow, serta cooling |
 | `Core/Src/thermistor.c` | Model NTC, kalibrasi dua titik, validasi, dan penyimpanan flash |

@@ -4,6 +4,7 @@
 #include "hardware_test.h"
 #include "heater_characterization.h"
 #include "main.h"
+#include "process_interlock.h"
 #include "task.h"
 
 #include <string.h>
@@ -19,6 +20,8 @@
 #define REFLOW_REFLOW_DURATION_MS    75000UL
 #define REFLOW_COOLING_END_TENTHS      500
 #define REFLOW_OVERTEMP_TENTHS        1250
+#define REFLOW_TEST_SAFETY_TENTHS     1100
+#define REFLOW_TEST_MAX_DURATION_MS  60000UL
 #define REFLOW_GRAPH_INTERVAL_MS      2000UL
 #define REFLOW_TASK_INTERVAL_MS        100U
 
@@ -28,6 +31,7 @@ static volatile int16_t preheat_tenths;
 static volatile int16_t soaking_tenths;
 static volatile int16_t reflow_tenths;
 static volatile uint8_t start_requested;
+static volatile uint8_t timed_test_requested;
 static volatile uint8_t stop_requested;
 static volatile uint8_t reflow_fault;
 static uint32_t profile_started_at;
@@ -36,6 +40,9 @@ static uint32_t last_graph_sample_at;
 static uint32_t last_elapsed_seconds;
 static uint8_t graph_temperature_degrees[REFLOW_GRAPH_SAMPLES];
 static uint8_t graph_count;
+static uint8_t heater_lock_held;
+static uint32_t timed_test_duration_ms;
+static uint8_t timed_test_duty_percent;
 
 static void record_graph_sample(const HardwareTestStatus *hardware,
                                 uint32_t now)
@@ -92,19 +99,37 @@ static void enter_cooling(uint8_t fault, uint32_t now)
 
 static void stop_profile(uint8_t fault, uint32_t now)
 {
-  HardwareTest_PIDStop();
+  if (reflow_state == REFLOW_STATE_TIMED_TEST)
+  {
+    HardwareTest_HeaterStop();
+  }
+  else
+  {
+    HardwareTest_PIDStop();
+  }
   reflow_fault = fault;
   if (reflow_state != REFLOW_STATE_IDLE)
   {
     last_elapsed_seconds = (now - profile_started_at) / 1000UL;
   }
   reflow_state = REFLOW_STATE_IDLE;
+  if (heater_lock_held != 0U)
+  {
+    ProcessInterlock_Give(PROCESS_OWNER_HEATER);
+    heater_lock_held = 0U;
+  }
 }
 
 static void start_profile(uint32_t now)
 {
   HardwareTestStatus hardware;
 
+  if (ProcessInterlock_Take(PROCESS_OWNER_HEATER, 0U) == 0U)
+  {
+    reflow_fault = 2U;
+    return;
+  }
+  heater_lock_held = 1U;
   HardwareTest_GetStatus(&hardware);
   if ((hardware.temperature_valid == 0U)
       || (hardware.thermistor_calibrated == 0U)
@@ -124,6 +149,36 @@ static void start_profile(uint32_t now)
   reflow_state = REFLOW_STATE_PREHEAT;
 }
 
+static void start_timed_test(uint32_t now)
+{
+  HardwareTestStatus hardware;
+
+  if (ProcessInterlock_Take(PROCESS_OWNER_HEATER, 0U) == 0U)
+  {
+    reflow_fault = 2U;
+    return;
+  }
+  heater_lock_held = 1U;
+  HardwareTest_GetStatus(&hardware);
+  if ((hardware.temperature_valid == 0U)
+      || (hardware.thermistor_calibrated == 0U)
+      || (hardware.temperature_tenths >= REFLOW_TEST_SAFETY_TENTHS)
+      || (HardwareTest_HeaterStartAtDuty(
+            timed_test_duty_percent, REFLOW_TEST_SAFETY_TENTHS) == 0U))
+  {
+    stop_profile(1U, now);
+    return;
+  }
+
+  reflow_fault = 0U;
+  graph_count = 0U;
+  profile_started_at = now;
+  stage_started_at = now;
+  last_graph_sample_at = now - REFLOW_GRAPH_INTERVAL_MS;
+  last_elapsed_seconds = 0U;
+  reflow_state = REFLOW_STATE_TIMED_TEST;
+}
+
 void Reflow_Init(void)
 {
   reflow_state = REFLOW_STATE_IDLE;
@@ -132,10 +187,14 @@ void Reflow_Init(void)
   soaking_tenths = REFLOW_DEFAULT_SOAKING_TENTHS;
   reflow_tenths = REFLOW_DEFAULT_REFLOW_TENTHS;
   start_requested = 0U;
+  timed_test_requested = 0U;
   stop_requested = 0U;
   reflow_fault = 0U;
   graph_count = 0U;
   last_elapsed_seconds = 0U;
+  heater_lock_held = 0U;
+  timed_test_duration_ms = 0U;
+  timed_test_duty_percent = 0U;
 }
 
 void Reflow_RequestStart(void)
@@ -144,6 +203,26 @@ void Reflow_RequestStart(void)
   {
     start_requested = 1U;
   }
+}
+
+uint8_t Reflow_RequestTimedTest(uint32_t duration_ms, uint8_t duty_percent)
+{
+  if ((reflow_state != REFLOW_STATE_IDLE)
+      || (timed_test_requested != 0U)
+      || (duration_ms == 0U)
+      || (duration_ms > REFLOW_TEST_MAX_DURATION_MS)
+      || (duty_percent == 0U) || (duty_percent > 100U))
+  {
+    return 0U;
+  }
+
+  taskENTER_CRITICAL();
+  timed_test_duration_ms = duration_ms;
+  timed_test_duty_percent = duty_percent;
+  start_requested = 0U;
+  timed_test_requested = 1U;
+  taskEXIT_CRITICAL();
+  return 1U;
 }
 
 void Reflow_RequestStop(void)
@@ -248,9 +327,17 @@ void Reflow_Task(void *argument)
 
     if (stop_requested != 0U)
     {
+      uint8_t was_running = (reflow_state != REFLOW_STATE_IDLE) ? 1U : 0U;
       stop_requested = 0U;
       start_requested = 0U;
-      stop_profile(0U, now);
+      timed_test_requested = 0U;
+      stop_profile(was_running ? 2U : 0U, now);
+    }
+    else if ((timed_test_requested != 0U)
+             && (reflow_state == REFLOW_STATE_IDLE))
+    {
+      timed_test_requested = 0U;
+      start_timed_test(now);
     }
     else if ((start_requested != 0U)
              && (reflow_state == REFLOW_STATE_IDLE))
@@ -269,7 +356,20 @@ void Reflow_Task(void *argument)
       {
         stop_profile(1U, now);
       }
+      else if ((reflow_state == REFLOW_STATE_TIMED_TEST)
+               && ((hardware.heater_enabled == 0U)
+                   || (hardware.temperature_tenths
+                       >= REFLOW_TEST_SAFETY_TENTHS)))
+      {
+        stop_profile(1U, now);
+      }
+      else if ((reflow_state == REFLOW_STATE_TIMED_TEST)
+               && ((now - stage_started_at) >= timed_test_duration_ms))
+      {
+        stop_profile(0U, now);
+      }
       else if ((reflow_state != REFLOW_STATE_COOLING)
+               && (reflow_state != REFLOW_STATE_TIMED_TEST)
                && ((hardware.pid_fault != 0U)
                    || (hardware.temperature_tenths
                        >= REFLOW_OVERTEMP_TENTHS)))
