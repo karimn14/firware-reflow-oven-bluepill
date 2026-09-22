@@ -282,8 +282,8 @@ Urutan uji end-to-end satu siklus:
 2. `HEAT-5S`: conveyor melepas mutex. Task thermal mengambil mutex heater dan menyalakan heater pada duty 25% selama 5 detik.
 3. Setelah 5 detik, heater dimatikan dan task thermal melepas mutex.
 4. `TO-END`: conveyor mengambil mutex lagi dan bergerak sampai sensor IR di ujung mendeteksi PCB. Motor kemudian berhenti.
-5. `INSPECT`: task inspeksi dan jalur request USB CDC dijalankan. Untuk pengujian mandiri, hasil PASS otomatis diberikan setelah 500 ms jika belum ada hasil eksternal.
-6. `SWIPE-R`: servo menyapu PCB ke kanan selama 500 ms, kembali ke posisi tengah, lalu state kembali `IDLE`.
+5. `INSPECT`: conveyor berhenti, firmware menunggu 300 ms agar PCB diam, lalu meminta inspeksi ke Raspberry Pi (`$DET`). Tanpa jawaban dalam 3 detik PCB disortir sebagai REJECT.
+6. `SWIPE-R` (PASS) atau `SWIPE-L` (FAIL/timeout): servo menyapu PCB selama 500 ms, kembali ke posisi tengah, firmware mengirim `$SORT`, lalu state kembali `IDLE`.
 
 Mutex plant hanya mempunyai satu pemilik pada satu waktu: `BELT`, `HEAT`, atau `FREE`. Output heater dipaksa mati ketika mutex sedang dimiliki conveyor. Uji pemanasan hanya dapat dimulai jika thermistor valid dan sudah dikalibrasi; sensor invalid, suhu mencapai 110 °C, atau timeout menghasilkan `HEAT-ERR` dan alur dihentikan.
 
@@ -297,35 +297,44 @@ Konfigurasi awal conveyor berada di `Core/Inc/conveyor_config.h`:
 | Duty/durasi uji heater | 25% / 5 detik |
 | Timeout gerak ke heater | 15 detik |
 | Timeout mencari sensor IR | 30 detik |
-| Hasil inspeksi otomatis | PASS setelah 500 ms |
+| Tunggu PCB diam sebelum inspeksi | 300 ms |
+| Timeout jawaban Raspberry Pi | 3 detik → REJECT |
+| Batas cadangan sequencer | 4,5 detik |
 | Servo kiri/tengah/kanan | 1000/1500/2000 µs |
 
 #### Protokol inspeksi USB CDC
 
-Frame menggunakan ASCII satu baris. Checksum adalah XOR semua karakter di antara `$` dan `*`, ditulis sebagai dua digit heksadesimal. Raspberry Pi berperan sebagai USB host; konektor USB Blue Pill hanya dapat terhubung ke satu host pada satu waktu, jadi PC dan Raspberry Pi tidak dapat memakai link CDC yang sama secara bersamaan.
+Spesifikasi lengkap ada di repositori utama: `sunda_reflow_oven/docs/stm-pi-protocol.md`. Sisi Raspberry Pi (`pi/station`) sudah mengimplementasikannya.
 
-STM32 meminta inspeksi:
+Frame menggunakan ASCII satu baris `$TYPE,key=value,...*CS`. Checksum adalah XOR semua karakter di antara `$` dan `*`, ditulis sebagai dua digit heksadesimal, dan **wajib**; frame tanpa checksum atau dengan checksum salah dibuang tanpa dijawab. Baris yang diawali `$` adalah frame protokol: tidak di-echo dan tidak dibalas prompt oleh console. Raspberry Pi berperan sebagai USB host; konektor USB Blue Pill hanya dapat terhubung ke satu host pada satu waktu.
 
-```text
-$INSPECT,id=1*7B
-```
+| Arah | Frame | Kapan |
+|---|---|---|
+| Blue Pill → Pi | `$HELLO,fw=bluepill-0.3,up=1234*CS` | Saat host membuka port (DTR naik) dan sebagai balasan `$HELLO` dari Pi |
+| Blue Pill → Pi | `$STAT,st=TO_CAMERA,zone=IDLE,pv=182.4,heat=0,conv=RUN,prox=0,item=3,up=52477,pass=2,fail=1*CS` | Setiap 500 ms |
+| Blue Pill → Pi | `$DET,id=1*78` | PCB diam 300 ms di bawah kamera; diulang tiap 300 ms (maks. 3 kali) sampai Pi membalas `$ACK` |
+| Blue Pill → Pi | `$ACK,id=1*64` | Setiap `$RES` diterima, juga yang terlambat, agar Pi berhenti mengirim ulang |
+| Blue Pill → Pi | `$SORT,id=1,bin=PASS*52` / `$SORT,id=1,bin=REJECT,why=TIMEOUT*60` | Servo kembali ke tengah |
+| Blue Pill → Pi | `$EVT,code=MOTOR_FAULT*CS` | Masuk state fault (`ESTOP`, `MOTOR_FAULT`, `PCB_TIMEOUT`, `HEATER_FAULT`) dan `RESET` setelah fault di-acknowledge |
+| Pi → Blue Pill | `$ACK,id=1*64` | `$DET` diterima |
+| Pi → Blue Pill | `$RES,id=1,v=PASS,code=-,n=0,ms=180*57` | Hasil inspeksi (`v=PASS` atau `v=FAIL`, `code` = kode cacat pertama) |
+| Pi → Blue Pill | `$HB,cv=READY*45` | Setiap 1 detik; OLED menampilkan `VIS:OK`/`VIS:--`. Tidak pernah menahan siklus. |
+| Pi → Blue Pill | `$HELLO,v=1*14` | Saat Pi membuka port |
 
-Raspberry Pi membalas salah satu:
+Nilai `st` pada `$STAT`: `IDLE`, `TO_HEATER` (START, TO-MID), `HEATING` (HEAT-5S), `TO_CAMERA` (TO-END), `INSPECT`, `SORT` (SWIPE-R/L, CENTER), `ESTOP`, `FAULT` (MOTOR-ERR, PCB-TIME, HEAT-ERR). Nilai `zone`: `IDLE`, `PREHEAT`, `SOAK`, `REFLOW`, `COOL`, `TEST` (uji heater berdurasi).
 
-```text
-$RESULT,id=1,PASS*19
-$RESULT,id=1,FAIL*0A
-$RESULT,id=1,PASS,conf=0.94*1F
-```
+`$RES` hanya dipakai bila `id`-nya sama dengan PCB yang sedang `INSPECT`; hasil lama atau untuk PCB lain diabaikan (tetap dibalas `$ACK`). Tidak ada jawaban dalam 3 detik setelah `$DET` pertama berarti PCB disapu ke kiri (REJECT) dan siklus tetap berjalan; `$SORT` membawa `why=TIMEOUT`. Tidak ada lagi hasil PASS otomatis. Untuk uji bench tanpa Raspberry Pi, `INSPECTION_BENCH_AUTO_PASS_MS` di `inspection.c` dapat diisi sementara; nilainya harus 0 pada line.
 
-`id` hasil wajib sama dengan PCB yang sedang menunggu. Firmware menerima field tambahan setelah PASS/FAIL, sehingga confidence atau kode inspeksi dapat disertakan. Checksum balasan disarankan dan diverifikasi bila ada; frame tanpa checksum juga diterima untuk bring-up. Frame dengan checksum salah atau ID lama diabaikan. Pada mode uji end-to-end ini, respons valid yang tiba dalam 500 ms tetap digunakan; jika tidak ada respons, firmware membuat hasil PASS otomatis agar pengujian servo dapat selesai tanpa Raspberry Pi.
+Selama port tidak dibuka host (DTR rendah), tidak ada frame yang dikirim, tetapi settle dan timeout tetap berjalan sehingga PCB tetap berakhir di salah satu sisi.
+
+Uji host logika inspeksi (tanpa board, memakai GCC PC): lihat `tests/host/README.md`.
 
 > [!WARNING]
 > Motor dan servo tidak boleh disuplai dari pin 3,3 V Blue Pill. Gunakan driver dan supply terpisah dengan common ground, level logika yang aman, sekering, serta emergency stop fisik. Pastikan arah H-bridge benar sebelum menjalankan siklus karena firmware ini hanya mengatur duty, bukan arah.
 
 ## Optimasi RAM
 
-Firmware menggunakan alokasi task FreeRTOS statis dan tidak menggunakan heap FreeRTOS dinamis. Software timer dan counting semaphore tetap dinonaktifkan; hanya satu mutex statis yang diaktifkan untuk interlock heater–conveyor. Jumlah level prioritas disesuaikan menjadi empat sambil mempertahankan urutan prioritas task. Pemeriksaan stack overflow level 2 tetap aktif dan memaksa output heater dan motor menjadi 0 jika overflow terdeteksi.
+Firmware menggunakan alokasi task FreeRTOS statis dan tidak menggunakan heap FreeRTOS dinamis. Software timer dan counting semaphore tetap dinonaktifkan; hanya satu mutex statis yang diaktifkan untuk interlock heater–conveyor. Jumlah level prioritas disesuaikan menjadi empat sambil mempertahankan urutan prioritas task. Pemeriksaan stack overflow level 2 tetap aktif dan mematikan heater serta motor sambil menjalankan fan 100% jika overflow terdeteksi.
 
 Buffer RX/TX USB CDC disesuaikan dengan ukuran maksimum paket Full Speed 64 byte, sedangkan ring buffer console 256 byte tetap dipertahankan. Riwayat grafik reflow tetap 128 sampel tetapi disimpan sebagai derajat terkuantisasi satu byte karena resolusi vertikal OLED hanya 32 piksel. Formatter teks ringan menggantikan `snprintf` pada UI dan console.
 
@@ -335,9 +344,9 @@ Hasil build Release setelah conveyor dan inspeksi ditambahkan:
 |---|---:|---:|
 | Sebelum optimasi | 17.304 byte | 84,49% |
 | Setelah optimasi karakterisasi | 9.480 byte | 46,29% |
-| Setelah conveyor + inspeksi | 10.840 byte | 52,93% |
+| Setelah protokol Pi + PID/fan | 11.600 byte | 56,64% |
 
-Walaupun dua task statis, mutex, state machine conveyor, dan protokol inspeksi ditambahkan, penggunaan RAM masih 6.464 byte lebih rendah daripada kondisi awal 84,49%. Konfigurasi RAM ini berada pada file generated seperti `freertos.c`, `FreeRTOSConfig.h`, dan konfigurasi USB; periksa kembali perubahan tersebut jika project diregenerasi dengan STM32CubeMX.
+Walaupun dua task statis, mutex, state machine conveyor, protokol inspeksi, dan buffer frame 160 byte ditambahkan, penggunaan RAM masih 5.704 byte lebih rendah daripada kondisi awal 84,49%. Konfigurasi RAM ini berada pada file generated seperti `freertos.c`, `FreeRTOSConfig.h`, dan konfigurasi USB; periksa kembali perubahan tersebut jika project diregenerasi dengan STM32CubeMX.
 
 ## STM32 HID bootloader
 
@@ -429,11 +438,11 @@ Perintah yang tersedia:
 | `status` | Membaca layar aktif, heater, duty heater/fan, ADC, suhu, resistansi, kalibrasi, PID, dan setpoint |
 | `echo <teks>` | Mengirim kembali teks ke host |
 
-Command console tetap tidak dapat menyalakan heater atau mengubah PID. Frame `$RESULT` dengan ID PCB aktif hanya diterima ketika state conveyor sedang `INSPECTION`; efeknya terbatas pada pilihan arah servo sebelum fallback PASS otomatis dijalankan.
+Command console tetap tidak dapat menyalakan heater atau mengubah PID. Frame `$RES` dengan ID PCB aktif hanya diterima ketika state conveyor sedang `INSPECTION`; efeknya terbatas pada pilihan arah servo.
 
-Data USB diterima oleh callback CDC dan dimasukkan ke ring buffer 256 byte. Task `cdcTask` memproses command tanpa melakukan pekerjaan berat di dalam interrupt USB. Panjang maksimum satu command adalah 95 karakter.
+Data USB diterima oleh callback CDC dan dimasukkan ke ring buffer 256 byte. Task `cdcTask` memproses command tanpa melakukan pekerjaan berat di dalam interrupt USB. Buffer input satu baris berukuran 160 byte agar frame protokol penuh dapat diterima.
 
-Selama karakterisasi heater aktif, task console juga mengirim satu baris CSV setiap detik. Saat inspeksi aktif, task yang sama mengirim frame `$INSPECT`. Program serial Raspberry Pi harus membuka DTR—perilaku bawaan `pyserial`—agar firmware menandai host terhubung dan mengirim request.
+Selama karakterisasi heater aktif, task console juga mengirim satu baris CSV setiap detik. Task yang sama adalah satu-satunya penulis ke USB: ia juga mengirim frame protokol Raspberry Pi (`$HELLO`, `$STAT`, `$DET`, `$ACK`, `$SORT`, `$EVT`). Program serial Raspberry Pi harus membuka DTR—perilaku bawaan `pyserial`—agar firmware menandai host terhubung dan mulai mengirim.
 
 ## Build firmware
 
@@ -495,7 +504,9 @@ Task flash mengubah ELF menjadi BIN terlebih dahulu, kemudian menjalankan `hid-f
 | `Core/Src/hardware_test.c` | State layar, tombol, ADC, heater, PID, serta UI reflow/karakterisasi/uji motor/conveyor |
 | `Core/Src/conveyor*.c` | Motion primitive, sequencer LOAD→HEAT→INSPECT→SORT, dan integrasi task |
 | `Core/Src/{encoder,motor,pcb_sensor,servo}.c` | Driver perangkat conveyor yang diadaptasi untuk STM32F103 |
-| `Core/Src/inspection.c` | Task request/retry/timeout dan parser hasil inspeksi Raspberry Pi |
+| `Core/Src/inspection.c` | Link inspeksi Raspberry Pi: settle, `$DET`/retry, timeout → REJECT, `$SORT`/`$EVT`/`$STAT`, parser `$RES`/`$ACK`/`$HB` |
+| `Core/Src/pi_protocol.c` | Build/parse frame `$TYPE,key=value,...*CS` (C murni, dapat diuji di PC) |
+| `tests/host/` | Uji host `inspection.c` dengan jam palsu dan Raspberry Pi tiruan |
 | `Core/Src/process_interlock.c` | Mutex statis pemisah ownership conveyor dan heater |
 | `Core/Src/heater_characterization.c` | State machine karakterisasi, cutoff, perhitungan laju, overshoot, dan sampel CSV |
 | `Core/Src/reflow.c` | State machine dan task profil preheat, soaking, reflow, serta cooling |

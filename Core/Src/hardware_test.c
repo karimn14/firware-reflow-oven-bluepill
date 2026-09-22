@@ -1521,8 +1521,9 @@ static void draw_conveyor_screen(void)
                    (unsigned long)inspection.board_id,
                    inspection_state_name(inspection.state));
   SSD1306_DrawString(&oled, 0U, 4U, line);
-  (void)TextFormat(line, sizeof(line), "PASS:%u FAIL:%u",
-                   inspection.pass_count, inspection.fail_count);
+  (void)TextFormat(line, sizeof(line), "P:%u F:%u VIS:%s",
+                   inspection.pass_count, inspection.fail_count,
+                   inspection.vision_online ? "OK" : "--");
   SSD1306_DrawString(&oled, 0U, 5U, line);
   SSD1306_DrawString(&oled, 0U, 6U,
                      (conveyor.state == CONVEYOR_SEQ_INSPECTION)
