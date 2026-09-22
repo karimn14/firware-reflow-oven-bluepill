@@ -17,7 +17,7 @@
  *   $RES,id=N,v=PASS|FAIL,...  -> $ACK,id=N, servo right (PASS) or left (FAIL)
  *   no matching $RES in time   -> left (REJECT), $SORT carries why=TIMEOUT
  *   servo back at centre       -> $SORT,id=N,bin=PASS|REJECT
- *   every 500 ms               -> $STAT (cycle state, heater, belt, counters)
+ *   every 500 ms               -> $STAT (cycle state, heater, fan, belt, counters)
  *
  * Timing lives in the inspection task. The CDC task is the only one that writes to USB: it calls
  * Inspection_HandleCdcLine() for received '$' lines and Inspection_CdcPoll() to send. */
@@ -383,6 +383,7 @@ static void send_stat(InspectionWriteFn write, uint32_t now)
   }
   PiProto_AddUint(&tx, "heat",
                   (hardware.heater_enabled != 0U) ? hardware.heater_duty_percent : 0U);
+  PiProto_AddUint(&tx, "fan", hardware.fan_duty_percent);
   PiProto_AddStr(&tx, "conv", (conveyor.motor_percent != 0U) ? "RUN" : "STOP");
   PiProto_AddUint(&tx, "prox", conveyor.ir_detected);
   PiProto_AddUint(&tx, "item", active_board_id);

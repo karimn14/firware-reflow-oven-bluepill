@@ -30,6 +30,7 @@ void HardwareTest_GetStatus(HardwareTestStatus *s)
   memset(s, 0, sizeof(*s));
   s->temperature_valid = 1U;
   s->temperature_tenths = 1824;
+  s->fan_duty_percent = 70U;
 }
 void Reflow_GetStatus(ReflowStatus *s) { memset(s, 0, sizeof(*s)); }
 
@@ -55,6 +56,7 @@ static void feed(const char *line)
 }
 
 static int det_count, tx_count;
+static int stat_has_fan;
 static char last_sort[64];
 
 static uint8_t write_fn(const char *text, uint16_t length)
@@ -65,6 +67,11 @@ static uint8_t write_fn(const char *text, uint16_t length)
   if (strncmp(text, "$DET", 4) == 0)
   {
     det_count++;
+  }
+  if ((strncmp(text, "$STAT", 5) == 0)
+      && (strstr(text, ",fan=70,") != NULL))
+  {
+    stat_has_fan = 1;
   }
   if (strncmp(text, "$SORT", 5) == 0 && length < sizeof(last_sort))
   {
@@ -165,7 +172,8 @@ int main(int argc, char **argv)
 
   /* expected outcome per scenario (docs/stm-pi-protocol.md) */
   {
-    int ok = (verdicts == 1) && (cv.state == CONVEYOR_SEQ_IDLE);
+    int ok = (verdicts == 1) && (cv.state == CONVEYOR_SEQ_IDLE)
+             && ((mode == PI_OFFLINE) || (stat_has_fan != 0));
     switch (mode)
     {
       case PI_ANSWERS:

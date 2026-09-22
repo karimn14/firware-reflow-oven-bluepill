@@ -311,7 +311,7 @@ Frame menggunakan ASCII satu baris `$TYPE,key=value,...*CS`. Checksum adalah XOR
 | Arah | Frame | Kapan |
 |---|---|---|
 | Blue Pill → Pi | `$HELLO,fw=bluepill-0.3,up=1234*CS` | Saat host membuka port (DTR naik) dan sebagai balasan `$HELLO` dari Pi |
-| Blue Pill → Pi | `$STAT,st=TO_CAMERA,zone=IDLE,pv=182.4,heat=0,conv=RUN,prox=0,item=3,up=52477,pass=2,fail=1*CS` | Setiap 500 ms |
+| Blue Pill → Pi | `$STAT,st=TO_CAMERA,zone=IDLE,pv=182.4,heat=0,fan=70,conv=RUN,prox=0,item=3,up=52477,pass=2,fail=1*CS` | Setiap 500 ms; `heat` dan `fan` adalah duty 0–100% |
 | Blue Pill → Pi | `$DET,id=1*78` | PCB diam 300 ms di bawah kamera; diulang tiap 300 ms (maks. 3 kali) sampai Pi membalas `$ACK` |
 | Blue Pill → Pi | `$ACK,id=1*64` | Setiap `$RES` diterima, juga yang terlambat, agar Pi berhenti mengirim ulang |
 | Blue Pill → Pi | `$SORT,id=1,bin=PASS*52` / `$SORT,id=1,bin=REJECT,why=TIMEOUT*60` | Servo kembali ke tengah |
