@@ -73,7 +73,8 @@ void ConveyorSequencer_Init(ConveyorSequencer *sequence,
   memset(sequence, 0, sizeof(*sequence));
   sequence->config = *config;
   Conveyor_Init(&sequence->motion, CONVEYOR_PWM_TIM, CONVEYOR_PWM_CHANNEL,
-                CONVEYOR_MOTOR_MIN_PWM, CONVEYOR_ENCODER_SLOTS);
+                CONVEYOR_MOTOR_MIN_PWM, CONVEYOR_ENCODER_TIM,
+                CONVEYOR_ENCODER_SLOTS);
   PcbSensor_Init(&sequence->ir_sensor, CONVEYOR_IR_PORT, CONVEYOR_IR_PIN,
                  CONVEYOR_IR_ACTIVE_LOW, CONVEYOR_IR_DEBOUNCE_TICKS);
   ConveyorServo_Init(&sequence->servo, CONVEYOR_SERVO_TIM,

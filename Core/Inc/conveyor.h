@@ -25,6 +25,7 @@ typedef struct
 
 void Conveyor_Init(ConveyorMotion *motion, TIM_HandleTypeDef *pwm_timer,
                    uint32_t pwm_channel, uint8_t minimum_duty,
+                   TIM_HandleTypeDef *encoder_timer,
                    uint32_t encoder_slots);
 void Conveyor_Move(ConveyorMotion *motion, uint8_t duty_percent,
                    uint32_t target_pulses);

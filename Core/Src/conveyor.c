@@ -5,6 +5,7 @@
 
 void Conveyor_Init(ConveyorMotion *motion, TIM_HandleTypeDef *pwm_timer,
                    uint32_t pwm_channel, uint8_t minimum_duty,
+                   TIM_HandleTypeDef *encoder_timer,
                    uint32_t encoder_slots)
 {
   if (motion == NULL)
@@ -12,7 +13,7 @@ void Conveyor_Init(ConveyorMotion *motion, TIM_HandleTypeDef *pwm_timer,
     return;
   }
   memset(motion, 0, sizeof(*motion));
-  SingleEncoder_Init(&motion->encoder, encoder_slots);
+  SingleEncoder_Init(&motion->encoder, encoder_timer, encoder_slots);
   ConveyorMotor_Init(&motion->motor, pwm_timer, pwm_channel, minimum_duty);
   motion->state = CONVEYOR_MOTION_STOPPED;
 }

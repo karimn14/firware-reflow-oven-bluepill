@@ -21,12 +21,60 @@
 #include "tim.h"
 
 /* USER CODE BEGIN 0 */
+#include "conveyor_config.h"
 
 /* USER CODE END 0 */
 
+TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
+
+/* TIM1 external clock counter: PA8/TIM1_CH1, one count per filtered edge. */
+void MX_TIM1_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
+
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 0;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 0xffffU;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* Map TI1 directly to channel 1 so IC1F filters the physical PA8 input
+   * before the signal becomes the external counter clock. */
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = CONVEYOR_ENCODER_FILTER;
+  if (HAL_TIM_IC_ConfigChannel(&htim1, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_TI1;
+  sClockSourceConfig.ClockPolarity = TIM_CLOCKPOLARITY_RISING;
+  sClockSourceConfig.ClockPrescaler = TIM_CLOCKPRESCALER_DIV1;
+  sClockSourceConfig.ClockFilter = CONVEYOR_ENCODER_FILTER;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
 
 /* TIM2 init function: 50 Hz servo PWM, 1 us per timer tick. */
 void MX_TIM2_Init(void)
@@ -145,6 +193,23 @@ void MX_TIM4_Init(void)
   HAL_TIM_MspPostInit(&htim4);
 }
 
+void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  if (tim_baseHandle->Instance == TIM1)
+  {
+    __HAL_RCC_TIM1_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    /* PA8 is sampled by the TIM1 input filter; it is no longer an EXTI pin. */
+    GPIO_InitStruct.Pin = CONVEYOR_ENCODER_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+    HAL_GPIO_Init(CONVEYOR_ENCODER_GPIO_Port, &GPIO_InitStruct);
+  }
+}
+
 void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef* tim_pwmHandle)
 {
 
@@ -232,6 +297,15 @@ void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef* tim_pwmHandle)
   else if(tim_pwmHandle->Instance==TIM4)
   {
     __HAL_RCC_TIM4_CLK_DISABLE();
+  }
+}
+
+void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
+{
+  if (tim_baseHandle->Instance == TIM1)
+  {
+    __HAL_RCC_TIM1_CLK_DISABLE();
+    HAL_GPIO_DeInit(CONVEYOR_ENCODER_GPIO_Port, CONVEYOR_ENCODER_Pin);
   }
 }
 

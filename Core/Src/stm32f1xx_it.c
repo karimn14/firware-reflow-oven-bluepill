@@ -23,9 +23,11 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "FreeRTOS.h"
-#include "encoder.h"
 #include "task.h"
 /* USER CODE END Includes */
+
+_Static_assert(configTICK_RATE_HZ == 1000U,
+               "Shared HAL/FreeRTOS SysTick requires a 1 kHz RTOS tick");
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
@@ -59,7 +61,6 @@
 
 /* External variables --------------------------------------------------------*/
 extern PCD_HandleTypeDef hpcd_USB_FS;
-extern TIM_HandleTypeDef htim1;
 
 /* USER CODE BEGIN EV */
 
@@ -178,20 +179,6 @@ void USB_LP_CAN1_RX0_IRQHandler(void)
 }
 
 /**
-  * @brief This function handles TIM1 update interrupt.
-  */
-void TIM1_UP_IRQHandler(void)
-{
-  /* USER CODE BEGIN TIM1_UP_IRQn 0 */
-
-  /* USER CODE END TIM1_UP_IRQn 0 */
-  HAL_TIM_IRQHandler(&htim1);
-  /* USER CODE BEGIN TIM1_UP_IRQn 1 */
-
-  /* USER CODE END TIM1_UP_IRQn 1 */
-}
-
-/**
   * @brief This function handles EXTI line[15:10] interrupts.
   */
 void EXTI15_10_IRQHandler(void)
@@ -214,18 +201,12 @@ extern void xPortSysTickHandler(void);
 
 void SysTick_Handler(void)
 {
+  /* HAL and FreeRTOS both use the 1 kHz Cortex-M SysTick. HAL needs the tick
+   * before the scheduler starts as well, hence this call is unconditional. */
+  HAL_IncTick();
   if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
   {
     xPortSysTickHandler();
-  }
-}
-
-void EXTI9_5_IRQHandler(void)
-{
-  if (__HAL_GPIO_EXTI_GET_IT(CONVEYOR_ENCODER_Pin) != RESET)
-  {
-    __HAL_GPIO_EXTI_CLEAR_IT(CONVEYOR_ENCODER_Pin);
-    ConveyorEncoder_OnPulseISR();
   }
 }
 

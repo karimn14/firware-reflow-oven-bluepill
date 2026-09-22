@@ -6,6 +6,10 @@
 
 /* STM32F103 Blue Pill adaptation of ../sunda_reflow_oven/firmware/conveyor. */
 #define CONVEYOR_ENCODER_SLOTS                 20U
+#define CONVEYOR_ENCODER_TIM                    (&htim1)
+/* IC1F=0xF: eight stable samples at fDTS/32. With a 72 MHz timer clock this
+ * rejects transitions shorter than approximately 3.6 us. */
+#define CONVEYOR_ENCODER_FILTER                 15U
 #define CONVEYOR_PWM_TIM                       (&htim4)
 #define CONVEYOR_PWM_CHANNEL                   TIM_CHANNEL_3
 #define CONVEYOR_MOTOR_MIN_PWM                 30U
@@ -30,8 +34,8 @@
 #define CONVEYOR_SERVO_RIGHT_US                2000U
 #define CONVEYOR_SERVO_STEP_MS                  500UL
 
-/* 16.25 cm / 6.5 cm wheel circumference * 20 slots = 50 pulses. */
-#define CONVEYOR_HEATER_POSITION_PULSES          500UL
+/* Initial commissioning target; calibrate this pulse count on the machine. */
+#define CONVEYOR_HEATER_POSITION_PULSES          50UL
 #define CONVEYOR_MOVE_TIMEOUT_MS              15000UL
 #define CONVEYOR_HEATER_TIMEOUT_MS            10000UL
 #define CONVEYOR_IR_TIMEOUT_MS                30000UL

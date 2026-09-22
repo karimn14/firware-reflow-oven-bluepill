@@ -81,7 +81,7 @@ Nilai posisi encoder, deadband motor, duty conveyor, dan pulse servo pada firmwa
 | Servo sorter | PA1 | TIM2 CH2 | PWM 50 Hz, 1 µs/tick; 1000/1500/2000 µs |
 | PWM heater / SSR | PA6 | TIM3 CH1 | PWM 1 Hz, aktif-high; digunakan aplikasi |
 | PWM fan | PA7 | TIM3 CH2 | PWM 1 Hz; baru dikonfigurasi, belum dijalankan aplikasi |
-| Encoder conveyor | PA8 | EXTI8 | Input rising-edge, pull-down, encoder satu kanal |
+| Encoder conveyor | PA8 | TIM1 CH1 | External clock rising-edge, pull-down, filter digital IC1F=`0xF` |
 | Sensor IR PCB | PB1 | GPIO input | Aktif-low, pull-up, debounce 150 ms |
 | OLED SCL | PB6 | I2C1 SCL | 400 kHz, open-drain |
 | OLED SDA | PB7 | I2C1 SDA | 400 kHz, open-drain |
@@ -255,7 +255,9 @@ Nilai suhu CSV menggunakan satuan sepersepuluh derajat Celsius; misalnya `875` b
 
 ### 6. Uji end-to-end conveyor, pemanasan, inspeksi, dan servo
 
-Firmware conveyor diadaptasi dari `../sunda_reflow_oven/firmware/conveyor`. Versi sumber menargetkan STM32F411/CMSIS-RTOS; integrasi ini menggunakan STM32F103, native FreeRTOS API, task statis, encoder EXTI, dan timer yang tidak berbenturan dengan heater maupun OLED.
+Firmware conveyor diadaptasi dari `../sunda_reflow_oven/firmware/conveyor`. Versi sumber menargetkan STM32F411/CMSIS-RTOS; integrasi ini menggunakan STM32F103, native FreeRTOS API, task statis, dan encoder counter hardware TIM1 yang tidak berbenturan dengan heater maupun OLED. HAL dan FreeRTOS berbagi SysTick 1 kHz; handler menaikkan tick HAL setiap interrupt dan meneruskan tick ke kernel setelah scheduler berjalan. Karena tick dipakai bersama, aplikasi tidak boleh memanggil `HAL_SuspendTick()` saat scheduler aktif; tindakan itu juga akan menghentikan tick FreeRTOS.
+
+Pulsa encoder pada PA8 dihitung oleh TIM1 external clock mode 1, sehingga tidak ada interrupt CPU untuk setiap edge. Filter input `IC1F=0xF` mensyaratkan delapan sampel stabil pada `fDTS/32`; pada clock timer 72 MHz, transisi yang lebih singkat dari sekitar 3,6 µs ditolak. Nilai ini dapat disesuaikan melalui `CONVEYOR_ENCODER_FILTER` jika karakteristik sensor berbeda.
 
 Halaman **CONVEYOR** dibuka otomatis saat boot. Halaman ini juga dapat dicapai dengan menahan D minimal 1,5 detik dari halaman karakterisasi untuk membuka **DC MOTOR TEST**, lalu menekan D sekali. OLED menampilkan state, duty motor, target speed, posisi/target encoder, sensor IR, pemilik mutex, pulse servo, nomor PCB, status inspeksi, serta penghitung PASS/FAIL.
 
@@ -271,7 +273,7 @@ Halaman **CONVEYOR** dibuka otomatis saat boot. Halaman ini juga dapat dicapai d
 
 Urutan uji end-to-end satu siklus:
 
-1. `TO-MID`: conveyor mengambil mutex plant, menjalankan motor, lalu berhenti di tengah setelah target encoder 50 pulsa tercapai.
+1. `TO-MID`: conveyor mengambil mutex plant, menjalankan motor, lalu berhenti di tengah setelah target encoder 500 pulsa tercapai.
 2. `HEAT-5S`: conveyor melepas mutex. Task thermal mengambil mutex heater dan menyalakan heater pada duty 25% selama 5 detik.
 3. Setelah 5 detik, heater dimatikan dan task thermal melepas mutex.
 4. `TO-END`: conveyor mengambil mutex lagi dan bergerak sampai sensor IR di ujung mendeteksi PCB. Motor kemudian berhenti.
@@ -286,7 +288,7 @@ Konfigurasi awal conveyor berada di `Core/Inc/conveyor_config.h`:
 |---|---:|
 | Duty motor | 70% |
 | Deadband minimum | 30% |
-| Target posisi heater | 50 pulse |
+| Target posisi heater | 500 pulse |
 | Duty/durasi uji heater | 25% / 5 detik |
 | Timeout gerak ke heater | 15 detik |
 | Timeout mencari sensor IR | 30 detik |
