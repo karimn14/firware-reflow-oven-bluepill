@@ -32,6 +32,7 @@
 #include "process_interlock.h"
 #include "reflow.h"
 #include "tim.h"
+#include "task_stack_report.h"
 #include "watchdog.h"
 
 /* USER CODE END Includes */
@@ -223,6 +224,72 @@ void vApplicationGetIdleTaskMemory(StaticTask_t **task_buffer,
 void vApplicationIdleHook(void)
 {
   Watchdog_IdleHook();
+}
+
+uint8_t TaskStackReport_Get(uint8_t index, TaskStackReport *report)
+{
+  TaskHandle_t handle;
+  uint16_t allocated_words;
+  UBaseType_t free_words;
+
+  if ((report == NULL) || (index >= TASK_STACK_REPORT_COUNT))
+  {
+    return 0U;
+  }
+
+  switch (index)
+  {
+    case 0U:
+      handle = defaultTaskHandle;
+      allocated_words = sizeof(defaultTaskStack) / sizeof(StackType_t);
+      report->name = "DEFAULT";
+      break;
+    case 1U:
+      handle = inputTaskHandle;
+      allocated_words = sizeof(inputTaskStack) / sizeof(StackType_t);
+      report->name = "INPUT";
+      break;
+    case 2U:
+      handle = cdcTaskHandle;
+      allocated_words = sizeof(cdcTaskStack) / sizeof(StackType_t);
+      report->name = "CDC";
+      break;
+    case 3U:
+      handle = reflowTaskHandle;
+      allocated_words = sizeof(reflowTaskStack) / sizeof(StackType_t);
+      report->name = "THERMAL";
+      break;
+    case 4U:
+      handle = conveyorTaskHandle;
+      allocated_words = sizeof(conveyorTaskStack) / sizeof(StackType_t);
+      report->name = "CONVEY";
+      break;
+    case 5U:
+      handle = inspectionTaskHandle;
+      allocated_words = sizeof(inspectionTaskStack) / sizeof(StackType_t);
+      report->name = "INSPECT";
+      break;
+    default:
+      handle = xTaskGetIdleTaskHandle();
+      allocated_words = sizeof(idleTaskStack) / sizeof(StackType_t);
+      report->name = "IDLE";
+      break;
+  }
+
+  if (handle == NULL)
+  {
+    return 0U;
+  }
+
+  free_words = uxTaskGetStackHighWaterMark(handle);
+  if (free_words > allocated_words)
+  {
+    free_words = allocated_words;
+  }
+  report->allocated_bytes = (uint16_t)(allocated_words * sizeof(StackType_t));
+  report->peak_used_bytes = (uint16_t)((allocated_words - free_words)
+                                       * sizeof(StackType_t));
+  return 1U;
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)

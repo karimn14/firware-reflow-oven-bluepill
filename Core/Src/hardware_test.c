@@ -11,6 +11,7 @@
 #include "process_interlock.h"
 #include "reflow.h"
 #include "ssd1306.h"
+#include "task_stack_report.h"
 #include "text_format.h"
 #include "thermistor.h"
 #include "tim.h"
@@ -78,7 +79,8 @@ typedef enum
   SCREEN_MOTOR_TEST,
   SCREEN_CONVEYOR,
   SCREEN_HOME,
-  SCREEN_SERVO_TEST
+  SCREEN_SERVO_TEST,
+  SCREEN_TASK_STACK
 } Screen;
 
 typedef enum
@@ -147,6 +149,7 @@ static uint8_t ui_profile_selection;
 static uint8_t ui_cal_selection;
 static uint8_t ui_pid_selection;
 static uint8_t ui_diag_selection;
+static uint8_t ui_stack_selection;
 static uint8_t ui_edit_selection;
 static int32_t ui_edit_value;
 static uint8_t ui_detail;
@@ -681,6 +684,10 @@ static void ui_stop(void)
       ConveyorApp_ManualServoStop();
       servo_test_selection = 1U;
     }
+    else if (current_screen == SCREEN_TASK_STACK)
+    {
+      /* Read-only page; there is no actuator to stop. */
+    }
     else
     {
       HardwareTest_HeaterStop();
@@ -731,6 +738,7 @@ static uint8_t ui_is_active(void)
       ConveyorApp_GetStatus(&conveyor);
       return conveyor.manual_servo_test_active;
     }
+    if (current_screen == SCREEN_TASK_STACK) return 0U;
     return heater_enabled;
   }
   return 0U;
@@ -926,7 +934,7 @@ static void ui_button(uint8_t button)
     else if (ui_page == UI_PID_MENU)
       ui_pid_selection = (uint8_t)((ui_pid_selection + 5 + delta) % 5);
     else if (ui_page == UI_DIAG_MENU)
-      ui_diag_selection = (uint8_t)((ui_diag_selection + 4 + delta) % 4);
+      ui_diag_selection = (uint8_t)((ui_diag_selection + 5 + delta) % 5);
     else if ((ui_page == UI_E2E_PREP) && (ui_e2e_profile != 2U))
       ConveyorApp_AdjustSpeed((button == 1U) ? 1 : -1);
     else if ((ui_page == UI_PROFILE_EDIT) || (ui_page == UI_PID_EDIT)
@@ -940,7 +948,11 @@ static void ui_button(uint8_t button)
     }
     else if (ui_page == UI_DIAG_RUN)
     {
-      if (current_screen == SCREEN_CHARACTERIZATION && ui_is_active() == 0U)
+      if (current_screen == SCREEN_TASK_STACK)
+        ui_stack_selection = (uint8_t)((ui_stack_selection
+                                        + TASK_STACK_REPORT_COUNT + delta)
+                                       % TASK_STACK_REPORT_COUNT);
+      else if (current_screen == SCREEN_CHARACTERIZATION && ui_is_active() == 0U)
         HeaterCharacterization_AdjustDuty((button == 1U) ? 1 : -1);
       else if (current_screen == SCREEN_MOTOR_TEST)
       {
@@ -1135,15 +1147,21 @@ static void ui_button(uint8_t button)
     if (ui_diag_selection == 0U) current_screen = SCREEN_CHARACTERIZATION;
     else if (ui_diag_selection == 1U) current_screen = SCREEN_HEATER;
     else if (ui_diag_selection == 2U) current_screen = SCREEN_MOTOR_TEST;
-    else
+    else if (ui_diag_selection == 3U)
     {
       current_screen = SCREEN_SERVO_TEST;
       servo_test_selection = 1U;
+    }
+    else
+    {
+      current_screen = SCREEN_TASK_STACK;
+      ui_stack_selection = 0U;
     }
     ui_open(UI_DIAG_RUN);
   }
   else if (ui_page == UI_DIAG_RUN)
   {
+    if (current_screen == SCREEN_TASK_STACK) return;
     if (ui_is_active() != 0U) ui_stop();
     else if (current_screen == SCREEN_CHARACTERIZATION)
     {
@@ -1219,7 +1237,8 @@ static void update_controls(void)
       ui_d_long_handled = 1U;
       if ((ui_any_active() != 0U)
           || (ui_page == UI_E2E_RUN) || (ui_page == UI_PROFILE_RUN)
-          || (ui_page == UI_DIAG_RUN))
+          || ((ui_page == UI_DIAG_RUN)
+              && (current_screen != SCREEN_TASK_STACK)))
       {
         ui_stop_all();
         ui_show_message(UI_MSG_STOPPED, UI_HOME);
@@ -1650,6 +1669,34 @@ static void draw_servo_test_screen(void)
   ui_line(7U, "D:TENGAH & KEMBALI");
 }
 
+static void draw_task_stack_screen(void)
+{
+  char line[22];
+  uint8_t first = (ui_stack_selection >= 4U)
+                  ? (ui_stack_selection - 3U) : 0U;
+
+  ui_line(0U, "TASK STACK");
+  ui_line(1U, "CONSUMPTION (BYTE)");
+  for (uint8_t row = 0U; row < 4U; ++row)
+  {
+    uint8_t index = first + row;
+    TaskStackReport report;
+
+    if ((index >= TASK_STACK_REPORT_COUNT)
+        || (TaskStackReport_Get(index, &report) == 0U))
+    {
+      continue;
+    }
+    (void)TextFormat(line, sizeof(line), "%c%-7s %4u/%4u",
+                     (index == ui_stack_selection) ? '>' : ' ',
+                     report.name, report.peak_used_bytes,
+                     report.allocated_bytes);
+    ui_line(2U + row, line);
+  }
+  ui_line(6U, "PEAK / ALOKASI");
+  ui_line(7U, "B/C:GESER D:KEMBALI");
+}
+
 static void ui_line(uint8_t row, const char *value)
 {
   memset(&oled.buffer[(uint16_t)row * SSD1306_WIDTH], 0, SSD1306_WIDTH);
@@ -1746,7 +1793,8 @@ static void ui_draw(void)
     "TITIK 1", "TITIK 2", "PEMANAS BANTU", "SIMPAN KALIBRASI"
   };
   static const char *const diag_items[] = {
-    "KARAKTER HEATER", "UJI HEATER MANUAL", "UJI MOTOR DC", "UJI SERVO"
+    "KARAKTER HEATER", "UJI HEATER MANUAL", "UJI MOTOR DC", "UJI SERVO",
+    "TASK STACK CONSUM."
   };
   char line[22];
   char temperature[10] = "--.-";
@@ -2073,9 +2121,9 @@ static void ui_draw(void)
   }
   else if (ui_page == UI_DIAG_MENU)
   {
-    ui_list("DIAGNOSTIK", diag_items, 4U, ui_diag_selection, 1U, 4U);
-    ui_line(5U, "MOTOR / SERVO / HEAT");
-    ui_line(6U, "AWALNYA MATI");
+    ui_list("DIAGNOSTIK", diag_items, 5U, ui_diag_selection, 1U, 4U);
+    ui_line(5U, "UJI & MONITOR TASK");
+    ui_line(6U, "PEAK SEJAK BOOT");
     ui_line(7U, "B:^ C:v A:BUKA D:<");
   }
   else if (ui_page == UI_DIAG_RUN)
@@ -2083,8 +2131,10 @@ static void ui_draw(void)
     if (current_screen == SCREEN_CHARACTERIZATION) draw_characterization_screen();
     else if (current_screen == SCREEN_MOTOR_TEST) draw_motor_test_screen();
     else if (current_screen == SCREEN_SERVO_TEST) draw_servo_test_screen();
+    else if (current_screen == SCREEN_TASK_STACK) draw_task_stack_screen();
     else draw_heater_screen(((uint32_t)latest_adc * ADC_REFERENCE_MV) / ADC_FULL_SCALE);
-    if (current_screen != SCREEN_SERVO_TEST)
+    if ((current_screen != SCREEN_SERVO_TEST)
+        && (current_screen != SCREEN_TASK_STACK))
     {
       ui_line(6U, ui_is_active() ? "A:STOP" : "A:MULAI B:+ C:-");
       ui_line(7U, "D:MATI & KEMBALI");

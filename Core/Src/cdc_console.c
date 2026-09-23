@@ -109,6 +109,8 @@ static const char *screen_name(HardwareTestScreen screen)
       return "home";
     case HARDWARE_TEST_SCREEN_SERVO_TEST:
       return "servo-test";
+    case HARDWARE_TEST_SCREEN_TASK_STACK:
+      return "task-stack";
     default:
       return "unknown";
   }

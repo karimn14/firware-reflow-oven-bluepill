@@ -127,6 +127,16 @@ keluar dari **PA2 (TIM2 CH3)**. Multimeter DC biasanya membaca rata-rata hanya
 sekitar 0,17–0,33 V untuk pulsa 3,3 V berdurasi 1–2 ms setiap 20 ms; gunakan
 osiloskop atau logic analyzer untuk memeriksa lebar pulsa dan perubahan posisi.
 
+### Konsumsi stack task
+
+Buka **Beranda → Diagnostik → Task Stack Consumption** (label menu OLED:
+`TASK STACK CONSUM.`). Gunakan **B/C** untuk menggulir ketujuh task dan **D**
+untuk kembali. Setiap baris menampilkan **puncak terpakai / alokasi** dalam byte
+sejak boot. Puncak dihitung dari `uxTaskGetStackHighWaterMark()`; angka ini dapat
+bertambah selama sistem berjalan dan hanya mencakup pola eksekusi yang sudah
+terjadi. Rincian alokasi dan ID watchdog ada di
+[`LAPORAN_WATCHDOG_TASK.md`](LAPORAN_WATCHDOG_TASK.md).
+
 Saat boot, OLED membuka **Beranda** dan semua aktuator mati. Pilih menu dengan **B** (naik) dan **C** (turun), lalu tekan **A** untuk membuka. **D singkat** kembali; **D tahan minimal 1,5 detik** kembali ke Beranda atau menghentikan proses aktif. Saat proses aktif, D singkat menukar tampilan ringkas/detail tanpa menyembunyikan monitor. Petunjuk yang berlaku selalu ditampilkan di bagian bawah OLED.
 
 | Menu | Fungsi |
