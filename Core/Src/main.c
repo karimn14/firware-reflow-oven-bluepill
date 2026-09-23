@@ -18,10 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#ifndef SERVO_TEST_ONLY
 #include "FreeRTOS.h"
 #include "task.h"
-#endif
 #include "adc.h"
 #include "i2c.h"
 #include "iwdg.h"
@@ -58,11 +56,7 @@
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-#ifndef SERVO_TEST_ONLY
 void MX_FREERTOS_Init(void);
-#else
-void ServoTest_Run(void);
-#endif
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -100,10 +94,6 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-#ifdef SERVO_TEST_ONLY
-  MX_TIM2_Init();
-  ServoTest_Run();
-#else
   MX_GPIO_Init();
   MX_ADC1_Init();
   MX_I2C1_Init();
@@ -125,9 +115,11 @@ int main(void)
   /* Create the statically allocated FreeRTOS tasks. */
   MX_FREERTOS_Init();
 
+  /* Start the hardware timer before scheduling any supervised task. */
+  MX_IWDG_Init();
+
   /* Start scheduler */
   vTaskStartScheduler();
-#endif
 
   /* We should never get here as control is now taken by the scheduler */
 

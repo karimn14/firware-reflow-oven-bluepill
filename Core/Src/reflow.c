@@ -6,6 +6,7 @@
 #include "main.h"
 #include "process_interlock.h"
 #include "task.h"
+#include "watchdog.h"
 
 #include <string.h>
 
@@ -411,6 +412,7 @@ void Reflow_Task(void *argument)
 
     HeaterCharacterization_Process();
 
+    Watchdog_Heartbeat(WATCHDOG_ID_THERMAL);
     vTaskDelay(pdMS_TO_TICKS(REFLOW_TASK_INTERVAL_MS));
   }
 }

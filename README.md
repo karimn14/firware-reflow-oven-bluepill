@@ -127,34 +127,6 @@ keluar dari **PA2 (TIM2 CH3)**. Multimeter DC biasanya membaca rata-rata hanya
 sekitar 0,17–0,33 V untuk pulsa 3,3 V berdurasi 1–2 ms setiap 20 ms; gunakan
 osiloskop atau logic analyzer untuk memeriksa lebar pulsa dan perubahan posisi.
 
-### Uji servo saja
-
-Build firmware khusus servo dengan:
-
-```bash
-cmake --preset ServoTest
-cmake --build --preset ServoTest
-arm-none-eabi-objcopy -O binary \
-  build/ServoTest/test-bluepill-1.elf \
-  build/ServoTest/test-bluepill-1.bin
-```
-
-Flash `build/ServoTest/test-bluepill-1.bin` melalui HID bootloader proyek.
-Firmware ini memakai alamat aplikasi bootloader `0x08000800`.
-Sambungkan sinyal servo ke **PA2**, daya servo ke suplai **5 V eksternal** yang
-sesuai, dan GND suplai ke GND Blue Pill. Jangan mengambil daya servo dari pin
-3,3 V Blue Pill.
-
-Setelah menyala, servo menahan posisi tengah selama 2 detik, lalu berulang:
-**1000 µs (kiri) → 1500 µs (tengah) → 2000 µs (kanan) → 1500 µs (tengah)**,
-masing-masing 2 detik. Hanya TIM2 CH3 yang diinisialisasi; motor, heater,
-fan, USB CDC, dan task aplikasi tidak dijalankan. Jika servo menyentuh batas
-mekanik, kecilkan rentang pulsa pada `Core/Src/servo_test.c` sebelum pengujian
-ulang. Untuk kembali ke firmware biasa, build preset `Release` dan flash
-hasilnya. Karena mode uji tidak menjalankan USB CDC, masuk ke bootloader secara
-manual sesuai metode aktivasi bootloader pada board sebelum flash berikutnya;
-task flash Zed yang memicu reset lewat CDC tidak dapat dipakai dari mode ini.
-
 Saat boot, OLED membuka **Beranda** dan semua aktuator mati. Pilih menu dengan **B** (naik) dan **C** (turun), lalu tekan **A** untuk membuka. **D singkat** kembali; **D tahan minimal 1,5 detik** kembali ke Beranda atau menghentikan proses aktif. Saat proses aktif, D singkat menukar tampilan ringkas/detail tanpa menyembunyikan monitor. Petunjuk yang berlaku selalu ditampilkan di bagian bawah OLED.
 
 | Menu | Fungsi |
@@ -407,7 +379,7 @@ Task flash mengubah ELF menjadi BIN terlebih dahulu, kemudian menjalankan `hid-f
 | `test-bluepill-1.ioc` | Konfigurasi STM32CubeMX |
 | `.zed/` | Task build, flash HID, size report, dan debug ST-Link |
 
-Catatan: file `iwdg.c` tersedia dari konfigurasi generated code, tetapi `MX_IWDG_Init()` belum dipanggil oleh aplikasi sehingga watchdog belum aktif.
+IWDG aktif pada firmware normal. Idle task hanya me-refresh IWDG bila heartbeat keenam task aplikasi dan idle task masih tepat waktu. Rincian ID, periode, batas heartbeat, prioritas, dan alokasi stack tersedia di [`LAPORAN_WATCHDOG_TASK.md`](LAPORAN_WATCHDOG_TASK.md).
 
 ## Peringatan keselamatan
 

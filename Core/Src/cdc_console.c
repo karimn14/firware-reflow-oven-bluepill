@@ -9,6 +9,7 @@
 #include "task.h"
 #include "text_format.h"
 #include "usbd_cdc_if.h"
+#include "watchdog.h"
 
 #include <string.h>
 
@@ -385,6 +386,7 @@ void CDC_Console_Task(void *argument)
     Inspection_CdcPoll(console_write, terminal_connected);
     console_print_characterization_log(&seen_characterization_session,
                                        &seen_characterization_sequence);
+    Watchdog_Heartbeat(WATCHDOG_ID_CDC);
     vTaskDelay(pdMS_TO_TICKS(5U));
   }
 }

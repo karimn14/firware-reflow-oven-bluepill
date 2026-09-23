@@ -6,6 +6,7 @@
 #include "heater_characterization.h"
 #include "reflow.h"
 #include "task.h"
+#include "watchdog.h"
 
 #include <stddef.h>
 
@@ -120,6 +121,7 @@ void ConveyorApp_Task(void *argument)
         }
       }
     }
+    Watchdog_Heartbeat(WATCHDOG_ID_CONVEYOR);
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(CONVEYOR_TASK_INTERVAL_MS));
   }
 }

@@ -23,14 +23,6 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
-        },
-        {
-            "name": "ServoTest",
-            "inherits": "default",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "SERVO_TEST_ONLY": "ON"
-            }
         }
     ],
     "buildPresets": [
@@ -41,10 +33,6 @@
         {
             "name": "Release",
             "configurePreset": "Release"
-        },
-        {
-            "name": "ServoTest",
-            "configurePreset": "ServoTest"
         }
     ]
 }

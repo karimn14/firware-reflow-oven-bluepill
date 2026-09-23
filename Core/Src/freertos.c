@@ -32,6 +32,7 @@
 #include "process_interlock.h"
 #include "reflow.h"
 #include "tim.h"
+#include "watchdog.h"
 
 /* USER CODE END Includes */
 
@@ -170,6 +171,7 @@ void StartDefaultTask(void *argument)
   for(;;)
   {
     HardwareTest_Run();
+    Watchdog_Heartbeat(WATCHDOG_ID_DEFAULT);
     vTaskDelay(pdMS_TO_TICKS(10U));
   }
   /* USER CODE END StartDefaultTask */
@@ -184,6 +186,7 @@ void StartInputTask(void *argument)
   for (;;)
   {
     HardwareTest_InputRun();
+    Watchdog_Heartbeat(WATCHDOG_ID_INPUT);
     vTaskDelay(pdMS_TO_TICKS(10U));
   }
 }
@@ -215,6 +218,11 @@ void vApplicationGetIdleTaskMemory(StaticTask_t **task_buffer,
   *task_buffer = &idleTaskControlBlock;
   *stack_buffer = idleTaskStack;
   *stack_size = configMINIMAL_STACK_SIZE;
+}
+
+void vApplicationIdleHook(void)
+{
+  Watchdog_IdleHook();
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)

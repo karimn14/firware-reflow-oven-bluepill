@@ -7,6 +7,7 @@
 #include "pi_protocol.h"
 #include "reflow.h"
 #include "task.h"
+#include "watchdog.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -238,6 +239,7 @@ void Inspection_Task(void *argument)
       }
     }
     previous = conveyor.state;
+    Watchdog_Heartbeat(WATCHDOG_ID_INSPECTION);
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(INSPECTION_TASK_INTERVAL_MS));
   }
 }

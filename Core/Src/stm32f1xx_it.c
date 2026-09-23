@@ -22,16 +22,12 @@
 #include "stm32f1xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#ifndef SERVO_TEST_ONLY
 #include "FreeRTOS.h"
 #include "task.h"
-#endif
 /* USER CODE END Includes */
 
-#ifndef SERVO_TEST_ONLY
 _Static_assert(configTICK_RATE_HZ == 1000U,
                "Shared HAL/FreeRTOS SysTick requires a 1 kHz RTOS tick");
-#endif
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
@@ -201,21 +197,17 @@ void EXTI15_10_IRQHandler(void)
 
 /* USER CODE BEGIN 1 */
 
-#ifndef SERVO_TEST_ONLY
 extern void xPortSysTickHandler(void);
-#endif
 
 void SysTick_Handler(void)
 {
   /* HAL and FreeRTOS both use the 1 kHz Cortex-M SysTick. HAL needs the tick
    * before the scheduler starts as well, hence this call is unconditional. */
   HAL_IncTick();
-#ifndef SERVO_TEST_ONLY
   if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
   {
     xPortSysTickHandler();
   }
-#endif
 }
 
 /* USER CODE END 1 */

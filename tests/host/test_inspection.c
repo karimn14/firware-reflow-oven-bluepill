@@ -10,6 +10,7 @@
 #include "hardware_test.h"
 #include "inspection.h"
 #include "reflow.h"
+#include "watchdog.h"
 
 typedef enum { PI_ANSWERS = 0, PI_SILENT, PI_LOST_ACK, PI_OFFLINE, PI_FAIL } PiMode;
 
@@ -24,6 +25,7 @@ static uint32_t det_seen_at, answer_at;
 
 uint32_t HAL_GetTick(void) { return now_ms; }
 TickType_t xTaskGetTickCount(void) { return now_ms; }
+void Watchdog_Heartbeat(WatchdogId id) { (void)id; }
 void ConveyorApp_GetStatus(ConveyorAppStatus *s) { *s = cv; }
 void HardwareTest_GetStatus(HardwareTestStatus *s)
 {
