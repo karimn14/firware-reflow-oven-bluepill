@@ -38,6 +38,8 @@
 #define CONVEYOR_HEATER_POSITION_PULSES          50UL
 #define CONVEYOR_MOVE_TIMEOUT_MS              15000UL
 #define CONVEYOR_HEATER_TIMEOUT_MS            10000UL
+/* Full preheat/soak/reflow/cooling can take much longer than the 5 s test. */
+#define CONVEYOR_REFLOW_HEATER_TIMEOUT_MS   1800000UL
 #define CONVEYOR_IR_TIMEOUT_MS                30000UL
 /* Last-resort guard only: inspection.c already rejects after the 300 ms settle
  * plus 3 s without a verdict. Keep this longer than that. */

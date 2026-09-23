@@ -104,6 +104,8 @@ static const char *screen_name(HardwareTestScreen screen)
       return "motor-test";
     case HARDWARE_TEST_SCREEN_CONVEYOR:
       return "conveyor";
+    case HARDWARE_TEST_SCREEN_HOME:
+      return "home";
     default:
       return "unknown";
   }

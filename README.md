@@ -43,6 +43,7 @@ Tool tersebut dapat digunakan untuk membantu menyiapkan integrasi project STM32 
 - Halaman OLED reflow dengan status tahap, target, output heater, waktu proses, dan grafik suhu bergulir.
 - Mode karakterisasi heater otomatis dengan duty tetap, cutoff 110 °C, pengukuran °C/s, overshoot, cooling, dan log CSV USB.
 - Sequencer conveyor otomatis dari LOAD → HEAT → INSPECT → SORT, dengan encoder, sensor IR, dan timeout fail-safe.
+- Dua mode end to end: uji heater 5 detik dan siklus conveyor dengan profil suhu lengkap sebelum inspeksi serta sortir.
 - Interlock mutex FreeRTOS yang mencegah motor conveyor dan profil heater menguasai plant pada saat bersamaan.
 - Inspeksi PCB melalui USB CDC ke Raspberry Pi dan servo sorting PASS ke kanan atau FAIL/timeout ke kiri.
 - Proteksi heater pada 150 °C untuk PID, 125 °C untuk reflow POC, dan 110 °C untuk karakterisasi.
@@ -114,223 +115,69 @@ Topologi kebalikannya juga dapat dikenali setelah dua titik kalibrasi yang valid
 
 ## Cara menggunakan program
 
-Saat boot, output heater dan motor dipastikan 0%, ADC dikalibrasi, data kalibrasi thermistor dimuat dari flash, OLED diinisialisasi, lalu program membuka layar **CONVEYOR** untuk pengujian end-to-end. Tekan A untuk memulai; semua aktuator tetap mati sebelum tombol ditekan.
+Saat boot, OLED membuka **Beranda** dan semua aktuator mati. Pilih menu dengan **B** (naik) dan **C** (turun), lalu tekan **A** untuk membuka. **D singkat** kembali; **D tahan minimal 1,5 detik** kembali ke Beranda atau menghentikan proses aktif. Saat proses aktif, D singkat menukar tampilan ringkas/detail tanpa menyembunyikan monitor. Petunjuk yang berlaku selalu ditampilkan di bagian bawah OLED.
 
-### Mode pengujian motor DC (layar awal)
-
-Hubungkan input PWM driver motor ke **PB8 (TIM4 CH3)**. PWM berjalan pada 20 kHz. Motor wajib memakai driver/H-bridge dan catu daya terpisah; jangan menghubungkan motor langsung ke pin Blue Pill. Satukan ground driver dengan ground Blue Pill.
-
-| Tombol | Fungsi |
+| Menu | Fungsi |
 |---|---|
-| A | Menjalankan/menghentikan motor |
-| B | Menaikkan duty cycle 10% |
-| C | Menurunkan duty cycle 10% |
-| D | Masuk ke halaman sequencer conveyor |
+| E2E Uji 5 Detik | Conveyor → pemanasan tetap 25% selama 5 detik → inspeksi → sortir; untuk uji singkat aktuator dan alur. |
+| E2E Profil 120C POC | Conveyor → profil uji preheat, soaking, pemanasan 120 °C, cooling → inspeksi → sortir. Targetnya mengikuti menu Profil Suhu. Ini bukan reflow solder. |
+| E2E Sn63 Terkunci | Rute reflow Sn63/Pb37 yang direncanakan; tombol mulai ditolak karena batas aman termal alat belum diuji dan suhu PCB belum dapat diukur. |
+| Profil suhu | Atur target preheat, soaking, dan reflow saat idle; tinjau durasi, lalu jalankan profil tanpa conveyor. |
+| Kalibrasi NTC | Ambil dua titik dengan suhu referensi, gunakan pemanas bantu bila perlu, lalu simpan ke flash setelah keduanya valid. |
+| Kendali PID | Atur setpoint, Kp, Ki, Kd saat idle; jalankan dan pantau kontrol suhu. |
+| Diagnostik | Karakterisasi heater, uji heater manual dengan cutoff, serta uji motor DC. |
+| Status alat | Lihat sensor, kalibrasi, vision, heater, fan, motor, dan interlock. |
 
-Duty awal adalah 40% dan dapat diatur pada rentang 30–100%. Perubahan duty langsung diterapkan ketika motor sedang berjalan. OLED juga menampilkan jumlah pulsa encoder yang terbaca pada PA8. Motor selalu tetap mati saat boot dan ketika keluar dari halaman pengujian.
+### End to end
 
-### 1. Mode pengujian heater
+Kedua menu E2E yang dapat dijalankan memakai sequencer conveyor dan memerlukan thermistor terkalibrasi serta pembacaan sensor valid. **E2E Uji 5 Detik** memakai heater 25% selama 5 detik, dengan timeout tahap heater 10 detik. **E2E Profil 120C POC** menjalankan seluruh profil uji suhu, termasuk cooling hingga ≤50 °C, dengan timeout tahap heater 30 menit. Conveyor baru bergerak ke posisi inspeksi setelah pemanasan pada mode yang dipilih selesai tanpa fault. **E2E Sn63** tetap terkunci dan tidak mengaktifkan motor atau heater.
 
-| Tombol | Fungsi |
-|---|---|
-| A | Menghidupkan/mematikan heater |
-| B | Menaikkan duty cycle sebesar 25% |
-| C | Menurunkan duty cycle sebesar 25% |
-| D | Masuk ke kalibrasi thermistor |
+Saat inspeksi, tombol **B** dapat memberi hasil PASS dan **C** hasil FAIL; Raspberry Pi juga dapat mengirim keputusan lewat USB CDC. Tanpa keputusan yang valid hingga timeout, PCB disortir sebagai FAIL/REJECT. **A** menghentikan proses; **D tahan** juga menghentikan dan membuka pesan status. Fault motor, IR/PCB, atau heater ditampilkan sebelum pengguna melanjutkan.
 
-Duty cycle awal adalah 50%. Heater menggunakan time-proportioning software dengan jendela 1 detik, sesuai untuk pengujian SSR zero-cross. Mode ini adalah mode manual dan tidak memiliki cutoff suhu otomatis; operator tetap bertanggung jawab mengawasi suhu dan sistem daya. Gunakan mode karakterisasi, bukan mode manual, untuk pengujian kemampuan heater dengan cutoff 110 °C.
+Kecepatan conveyor bawaan 70%, dapat diubah 5% per langkah pada layar persiapan, dalam rentang 30–100%. Posisi heater 50 pulsa encoder serta nilai duty, timeout, dan servo pada `Core/Inc/conveyor_config.h` masih nilai awal POC yang harus disesuaikan dengan mekanik sebenarnya.
 
-### 2. Kalibrasi thermistor dua titik
+### Profil suhu
 
-Gunakan referensi suhu yang tepercaya dan ambil dua titik yang berjauhan agar model thermistor lebih akurat.
+Target bawaan: preheat **60 °C**, soaking **90 °C**, reflow **120 °C**. Durasi pemanasan berturut-turut **90, 75, dan 75 detik**, lalu cooling hingga suhu **≤50 °C**. Editor target tersedia hanya saat idle; firmware menjaga `preheat < soaking < reflow` dengan jarak minimal 5 °C, batas preheat minimal 40 °C, dan puncak reflow maksimal 120 °C. Grafik suhu dan target tampil selama proses. Nilai target kembali ke bawaan setelah reset.
 
-| Tombol | Fungsi |
-|---|---|
-| A | Menangkap ADC dan suhu referensi untuk titik aktif |
-| B | Menambah suhu referensi 0,1 °C; tahan untuk auto-repeat |
-| C | Mengurangi suhu referensi 0,1 °C; tahan untuk auto-repeat |
-| D singkat | Menghidupkan/mematikan heater kalibrasi |
-| D ditahan ≥1,5 detik | Keluar ke mode PID; simpan apabila kedua titik valid |
+Target pada menu ini juga dipakai **E2E Profil 120C POC**. Profil 120 °C adalah profil POC untuk alat saat ini, **belum profil solder produksi**; batas keselamatan profil 125 °C tetap berlaku.
+Perpindahan tahap POC masih berdasarkan waktu; firmware belum mensyaratkan suhu target benar-benar tercapai sebelum lanjut. Karena itu hasil E2E POC tidak menyatakan solder pada PCB sudah meleleh.
 
-Alur kalibrasi:
+### Kandidat profil solder Sn63/Pb37
 
-1. Masuk ke layar kalibrasi dengan tombol D dari layar pengujian heater.
-2. Stabilkan sistem pada suhu pertama.
-3. Sesuaikan `REF` dengan tombol B/C, lalu tekan A untuk mengambil titik P1.
-4. Stabilkan sistem pada suhu kedua yang berbeda cukup jauh.
-5. Sesuaikan `REF`, lalu tekan A untuk mengambil titik P2.
-6. Tahan D minimal 1,5 detik untuk menyimpan dan masuk ke layar PID.
+Sn63/Pb37 melebur pada **183 °C**. Sebagai contoh untuk **pasta AIM NC293+** (belum dipastikan sebagai pasta yang digunakan), datasheet menyebut ramp awal 1,4–1,8 °C/detik menuju 150 °C, soak **150–170 °C selama 30–60 detik**, puncak **215 ± 5 °C**, waktu PCB di atas 183 °C **45 ± 15 detik**, dan pendinginan maksimal 4 °C/detik. Nilai ini adalah acuan pengembangan, **bukan setelan aktif firmware**. Resep akhir harus mengikuti datasheet pasta yang benar-benar dipakai dan batas suhu komponen PCB.
 
-Data yang lolos validasi disimpan pada halaman flash terakhir, `0x0801FC00–0x0801FFFF`. Firmware menghitung ulang nilai Beta dan resistansi nominal R25 dari dua titik tersebut. Kalibrasi yang belum lengkap tidak disimpan. Data valid dari layout lama pada `0x0800FC00` akan dimigrasikan otomatis satu kali ke alamat baru.
+**Status alat: belum diuji.** Suhu maksimum aman heater, sensor, PCB, dan pelindung termal belum diverifikasi. **NTC PID terpasang pada pelat; tidak ada termokopel PCB.** Maka pembacaan NTC bukan suhu solder/PCB dan tidak dapat dipakai untuk menyatakan berapa lama sambungan solder berada di atas 183 °C. Catatan karakterisasi yang tersedia hanya menunjukkan puncak pelat sekitar 149 °C; itu tidak membuktikan alat bisa mencapai atau mempertahankan 215 °C, maupun membuktikan suhu PCB mengikuti pelat. Karena itu menu E2E Sn63 menolak start.
 
-### 3. Mode kendali PID
+Sebelum profil solder produksi dapat diaktifkan, ukur suhu PCB pada papan uji dengan termokopel yang terpasang di titik representatif sambil mencatat suhu pelat; tentukan selisih dan keterlambatan panas pada beberapa kondisi. Verifikasi batas aman seluruh komponen, kemampuan ramp/peak/cooling, serta proteksi termal independen. Setelah itu implementasikan dan uji logika tahap terhadap pengukuran suhu PCB dan waktu di atas liquidus, sesuai datasheet pasta yang benar-benar digunakan. Termokopel eksternal dapat dipakai untuk validasi resep; bila alat produksi tetap hanya memiliki NTC pelat, firmware tidak dapat mengetahui suhu PCB setiap siklus secara langsung. Menaikkan setpoint dan cutoff pelat saja tidak memenuhi syarat tersebut.
 
-| Tombol | Fungsi |
-|---|---|
-| A | Menjalankan/menghentikan PID |
-| B | Menaikkan setpoint 0,5 °C; tahan untuk auto-repeat |
-| C | Menurunkan setpoint 0,5 °C; tahan untuk auto-repeat |
-| D | Mematikan PID dan membuka halaman PCB reflow |
+Rujukan profil: [AIM Sn63/Pb37](https://www.aimsolder.com/products/sn63-pb37-leaded-solder-alloy/), [datasheet AIM NC293+](https://www.aimsolder.com/wp-content/uploads/legacy-files/nc293_sn_pb_solder_paste_tds.pdf), dan [panduan profil PCB AIM](https://www.aimsolder.com/white-paper/reflow-profiling-in-soldering-and-pcb-assembly/).
 
-Setpoint awal adalah 70 °C dan dapat diatur pada rentang 20–140 °C. PID hanya dapat dijalankan jika thermistor sudah dikalibrasi dan pembacaan sensor valid. Konfigurasi kontrol saat ini:
+### Merekam pelat untuk uji dengan termokopel PCB eksternal
 
-| Parameter | Nilai |
-|---|---:|
-| Kp | 1,5 |
-| Ki | 0,035 |
-| Kd | 14,0 |
-| Interval kontrol | 250 ms |
-| Laju ramp setpoint | 0,45 °C/s |
-| Konstanta filter derivatif | 1,0 s |
-| Feed-forward heater | 0,0265 °C/s per 1% duty |
-| Horizon prediksi inersia | 12 detik |
-| Batas duty PID | 50% |
-| Batas keselamatan | heater off pada ≥150 °C |
+Firmware sudah mengirim frame `$STAT` lewat USB CDC setiap 500 ms. Kolom `pv` adalah **suhu NTC pelat**, `up` adalah waktu STM32 dalam milidetik, dan `zone` menunjukkan tahap termal. Skrip baca saja berikut menyimpan frame valid beserta waktu komputer; skrip tidak mengirim perintah ke firmware:
 
-Parameter tersebut diturunkan dari empat log pada direktori `heater_char`. Laju ramp 0,45 °C/s berada di bawah kemampuan rata-rata heater pada duty 25% (sekitar 0,58 °C/s), sedangkan duty PID dibatasi 50% karena pengujian 75–100% menghasilkan overshoot lebih dari 40 °C. Pengendali memakai feed-forward untuk mengejar ramp, PID untuk mengoreksi error, serta prediksi suhu untuk mengurangi daya sebelum suhu aktual mencapai target.
-
-Fan 4-wire bekerja sebagai pengereman termal bertingkat 50%, 70%, atau 100% ketika suhu prediksi melewati target. Heater dan fan tidak diperintah aktif bersamaan. TIM3 CH2 menghasilkan PWM 25 kHz open-drain pada PA7, sedangkan heater PA6 dikendalikan dengan time-proportioning software berjendela 1 detik agar cocok untuk SSR zero-cross. Kabel tacho fan tidak digunakan, sehingga duty fan bersifat open-loop tanpa pembacaan RPM atau deteksi fan macet. Perilaku fan pada perintah 0% bergantung pada tipenya; bila unit tidak berhenti pada 0%, pemutusan daya fan memerlukan sakelar daya terpisah.
-
-### 4. Mode PCB reflow POC
-
-Tekan D dari halaman PID untuk membuka halaman reflow. Task `reflowTask` menjalankan urutan tahap secara terpisah dari task input dan display, sedangkan pengaturan daya heater tetap menggunakan pengendali PID yang sama.
-
-Profil bawaan sengaja diturunkan untuk demonstrasi dengan target puncak maksimum 120 °C:
-
-| Tahap | Target bawaan | Durasi/kondisi selesai |
-|---|---:|---|
-| Idle | Heater mati | Menunggu tombol A |
-| Preheat | 60 °C | 90 detik |
-| Soaking | 90 °C | 75 detik |
-| Reflow | 120 °C | 75 detik |
-| Cooling | Heater mati | Hingga suhu ≤50 °C |
-
-Durasi setiap tahap pemanasan masih tetap di dalam firmware. Target suhu dapat diatur ketika status **IDLE**:
-
-| Tombol | Fungsi pada halaman reflow |
-|---|---|
-| A | Menjalankan profil; saat proses aktif, menghentikan profil dan mematikan heater |
-| B | Menaikkan target tahap terpilih 1 °C; tahan untuk auto-repeat |
-| C | Menurunkan target tahap terpilih 1 °C; tahan untuk auto-repeat |
-| D singkat | Memilih target Preheat (`P`), Soaking (`S`), atau Reflow (`R`) |
-| D ditahan ≥1,5 detik | Menghentikan profil, mematikan heater, dan membuka halaman karakterisasi heater |
-
-Firmware menjaga urutan target `Preheat < Soaking < Reflow` dengan selisih minimum 5 °C. Target preheat tidak dapat diturunkan di bawah 40 °C dan target puncak reflow tidak dapat dinaikkan di atas 120 °C. Perubahan target dikunci selama profil berjalan. Pengaturan profil belum disimpan ke flash dan kembali ke nilai bawaan setelah reset.
-
-OLED menampilkan tahap aktif (`IDLE`, `PREHEAT`, `SOAKING`, `REFLOW`, atau `COOLING`), suhu aktual, waktu total, ketiga target, output heater/fan, dan target tahap aktif. Grafik menyimpan 128 sampel dengan interval 2 detik, sehingga menampilkan sekitar 256 detik riwayat suhu; garis titik-titik menunjukkan target aktif. Skala grafik adalah 20–120 °C.
-
-Profil hanya dapat dimulai jika thermistor sudah dikalibrasi dan pembacaannya valid. Selama tahap pemanasan, suhu aktual ≥125 °C atau fault PID langsung mematikan heater dan memindahkan state ke cooling dengan indikator fault `!`. Kehilangan pembacaan sensor mematikan profil. Pada state cooling, heater dimatikan dan fan PA7 dijalankan 100% hingga suhu ≤50 °C.
-
-> [!WARNING]
-> Profil 120 °C ini hanya untuk proof-of-concept dan tidak cukup untuk proses solder reflow produksi. Batas 120 °C adalah batas **target**; inersia termal masih dapat menyebabkan overshoot, sehingga firmware menggunakan cutoff tambahan pada 125 °C. Tetap gunakan pengaman termal independen dan pengawasan operator.
-
-### 5. Karakterisasi heater otomatis
-
-Tahan tombol D minimal 1,5 detik pada halaman reflow untuk membuka **HEATER CHARACTERIZATION**. Mode ini memberikan duty PWM tetap agar kemampuan plant dapat diukur tanpa dipengaruhi ramp PID.
-
-| Tombol | Fungsi pada halaman karakterisasi |
-|---|---|
-| A | Memulai pengujian; saat pengujian aktif, menghentikan pengujian dan mematikan heater |
-| B | Menaikkan duty 25% |
-| C | Menurunkan duty 25% |
-| D ditahan ≥1,5 detik | Menghentikan pengujian dan membuka halaman uji motor DC |
-
-Duty bawaan adalah 25% dan dapat dipilih menjadi 25%, 50%, 75%, atau 100% ketika pengujian tidak aktif. Pengujian hanya dapat dimulai jika thermistor sudah dikalibrasi, sensor valid, dan suhu awal ≤50 °C.
-
-Urutan pengujian otomatis:
-
-1. State **HEATING** menjalankan heater pada duty yang dipilih.
-2. Firmware menghitung laju suhu setiap jendela 10 detik serta laju rata-rata sejak pengujian dimulai.
-3. Pada suhu 110 °C, heater dimatikan dan state berpindah ke **COOLING**.
-4. Firmware terus merekam suhu puncak dan overshoot setelah heater dimatikan.
-5. State menjadi **COMPLETE** ketika suhu kembali hingga 3 °C di atas suhu awal.
-
-Proteksi tambahan mematikan heater langsung ketika sensor menjadi invalid atau mencapai cutoff 110 °C. Pemanasan dibatasi maksimal 15 menit dan pencatatan cooling maksimal 30 menit. OLED menampilkan state, suhu, duty, laju saat ini, laju rata-rata, suhu puncak, overshoot, waktu, dan fault.
-
-Saat terminal USB CDC terhubung, firmware otomatis mengirim sampel CSV setiap detik dengan header:
-
-```text
-elapsed_ms,state,duty_pct,temp_tenths_c,rate_milli_c_per_s,peak_tenths_c,overshoot_tenths_c,fault
+```bash
+python3 -m pip install pyserial
+python3 tools/log_plate.py /dev/ttyACM0 plate.csv
+# Windows: python tools/log_plate.py COM3 plate.csv
 ```
 
-Nilai suhu CSV menggunakan satuan sepersepuluh derajat Celsius; misalnya `875` berarti 87,5 °C. Laju menggunakan mili-°C/detik; `583` berarti 0,583 °C/detik. Kode fault: `0` normal, `1` sensor invalid, `2` belum dikalibrasi, `3` suhu awal terlalu tinggi, `4` timeout pemanasan, `5` timeout cooling, dan `6` dibatalkan operator.
+Tekan `Ctrl-C` untuk mengakhiri rekaman. Simpan log termokopel PCB dari instrumen eksternal secara terpisah, dengan waktu mulai atau penanda yang dapat dicocokkan ke `host_utc`/`stm_up_ms`. Port USB hanya dapat dipakai satu host pada satu waktu; bila PC merekam profil, inspeksi Raspberry Pi tidak tersambung dan hasil inspeksi bisa dimasukkan manual lewat tombol. Perekam ini juga dapat dipakai saat **Profil Suhu POC** tanpa conveyor.
 
-> [!IMPORTANT]
-> Mode karakterisasi mengurangi risiko kesalahan pencatatan, tetapi bukan pengaman kelistrikan atau termal independen. Gunakan thermal fuse/thermostat, sekering, isolasi, dan pemutus daya fisik yang sesuai.
+Untuk pengambilan data awal, gunakan hanya mode dan batas suhu firmware saat ini. Pasang termokopel pada titik PCB yang mewakili sambungan solder; bila mungkin ukur juga titik yang diperkirakan paling panas dan paling dingin. Catat tipe PCB, posisi sensor, suhu pelat dan PCB terhadap waktu, selisih suhu, serta keterlambatan pemanasan/pendinginan. Data pada rentang POC **tidak boleh diekstrapolasi sebagai bukti aman pada 215 °C**. Pengujian suhu tinggi menunggu verifikasi batas termal alat dan komponen serta profil pasta yang benar.
 
-### 6. Uji end-to-end conveyor, pemanasan, inspeksi, dan servo
+### Kalibrasi NTC
 
-Firmware conveyor diadaptasi dari `../sunda_reflow_oven/firmware/conveyor`. Versi sumber menargetkan STM32F411/CMSIS-RTOS; integrasi ini menggunakan STM32F103, native FreeRTOS API, task statis, dan encoder counter hardware TIM1 yang tidak berbenturan dengan heater maupun OLED. HAL dan FreeRTOS berbagi SysTick 1 kHz; handler menaikkan tick HAL setiap interrupt dan meneruskan tick ke kernel setelah scheduler berjalan. Karena tick dipakai bersama, aplikasi tidak boleh memanggil `HAL_SuspendTick()` saat scheduler aktif; tindakan itu juga akan menghentikan tick FreeRTOS.
+Gunakan termometer referensi yang tepercaya dan ambil dua titik yang berjauhan. Pilih Titik 1/Titik 2, sesuaikan suhu referensi dengan **B/C** sebesar 0,1 °C per tekan, lalu **A** untuk mengambil data ADC. Pemanas bantu mempunyai layar terpisah; heater mati saat layar itu ditinggalkan. Menyimpan memerlukan dua titik yang valid, dan OLED menampilkan sukses hanya setelah penulisan flash berhasil. Data kalibrasi disimpan pada halaman flash terakhir `0x0801FC00–0x0801FFFF`.
 
-Pulsa encoder pada PA8 dihitung oleh TIM1 external clock mode 1, sehingga tidak ada interrupt CPU untuk setiap edge. Filter input `IC1F=0xF` mensyaratkan delapan sampel stabil pada `fDTS/32`; pada clock timer 72 MHz, transisi yang lebih singkat dari sekitar 3,6 µs ditolak. Nilai ini dapat disesuaikan melalui `CONVEYOR_ENCODER_FILTER` jika karakteristik sensor berbeda.
+### PID dan diagnostik
 
-Halaman **CONVEYOR** dibuka otomatis saat boot. Halaman ini juga dapat dicapai dengan menahan D minimal 1,5 detik dari halaman karakterisasi untuk membuka **DC MOTOR TEST**, lalu menekan D sekali. OLED menampilkan state, duty motor, target speed, posisi/target encoder, sensor IR, pemilik mutex, pulse servo, nomor PCB, status inspeksi, serta penghitung PASS/FAIL.
+Setpoint PID bawaan **70 °C**, rentang **20–140 °C**, berubah 0,5 °C per langkah. Gain bawaan adalah Kp **1,50**, Ki **0,035**, Kd **14,00**. Gain dapat diedit saat idle dan berlaku untuk sesi saat ini; reset mengembalikannya ke bawaan. PID memerlukan kalibrasi dan sensor valid, dengan batas keselamatan heater **150 °C**. Kontrol memiliki ramp setpoint, filter derivatif, pembatas integral, feed-forward, dan pengereman fan.
 
-| Tombol | Fungsi pada halaman conveyor |
-|---|---|
-| A pada `IDLE` | Memulai satu siklus otomatis |
-| A saat siklus aktif | Abort: heater dan motor dimatikan, state menjadi `ESTOP` |
-| A pada state fault | Acknowledge fault dan kembali ke `IDLE` |
-| B/C pada `IDLE` | Menaikkan/menurunkan duty motor 5% |
-| B/C saat `INSPECT` | Memasukkan hasil PASS/FAIL secara manual sebelum hasil otomatis dijalankan |
-| D singkat pada `IDLE` | Mengembalikan servo ke posisi tengah |
-| D ditahan ≥1,5 detik | Kembali ke halaman heater tanpa menghentikan siklus yang sedang berjalan |
+Uji heater manual di Diagnostik kini memakai cutoff **110 °C** dan mematikan heater bila sensor gagal. Duty dapat dipilih 25–100% saat heater mati. Karakterisasi heater memakai cutoff 110 °C dan menghasilkan log CSV melalui USB CDC. Uji motor DC mempunyai duty awal 40%, rentang 30–100%, serta menampilkan pulsa encoder; keluar dari layar uji menghentikan motor.
 
-Urutan uji end-to-end satu siklus:
-
-1. `TO-MID`: conveyor mengambil mutex plant, menjalankan motor, lalu berhenti di tengah setelah target encoder 500 pulsa tercapai.
-2. `HEAT-5S`: conveyor melepas mutex. Task thermal mengambil mutex heater dan menyalakan heater pada duty 25% selama 5 detik.
-3. Setelah 5 detik, heater dimatikan dan task thermal melepas mutex.
-4. `TO-END`: conveyor mengambil mutex lagi dan bergerak sampai sensor IR di ujung mendeteksi PCB. Motor kemudian berhenti.
-5. `INSPECT`: conveyor berhenti, firmware menunggu 300 ms agar PCB diam, lalu meminta inspeksi ke Raspberry Pi (`$DET`). Tanpa jawaban dalam 3 detik PCB disortir sebagai REJECT.
-6. `SWIPE-R` (PASS) atau `SWIPE-L` (FAIL/timeout): servo menyapu PCB selama 500 ms, kembali ke posisi tengah, firmware mengirim `$SORT`, lalu state kembali `IDLE`.
-
-Mutex plant hanya mempunyai satu pemilik pada satu waktu: `BELT`, `HEAT`, atau `FREE`. Output heater dipaksa mati ketika mutex sedang dimiliki conveyor. Uji pemanasan hanya dapat dimulai jika thermistor valid dan sudah dikalibrasi; sensor invalid, suhu mencapai 110 °C, atau timeout menghasilkan `HEAT-ERR` dan alur dihentikan.
-
-Konfigurasi awal conveyor berada di `Core/Inc/conveyor_config.h`:
-
-| Parameter | Nilai awal |
-|---|---:|
-| Duty motor | 70% |
-| Deadband minimum | 30% |
-| Target posisi heater | 500 pulse |
-| Duty/durasi uji heater | 25% / 5 detik |
-| Timeout gerak ke heater | 15 detik |
-| Timeout mencari sensor IR | 30 detik |
-| Tunggu PCB diam sebelum inspeksi | 300 ms |
-| Timeout jawaban Raspberry Pi | 3 detik → REJECT |
-| Batas cadangan sequencer | 4,5 detik |
-| Servo kiri/tengah/kanan | 1000/1500/2000 µs |
-
-#### Protokol inspeksi USB CDC
-
-Spesifikasi lengkap ada di repositori utama: `sunda_reflow_oven/docs/stm-pi-protocol.md`. Sisi Raspberry Pi (`pi/station`) sudah mengimplementasikannya.
-
-Frame menggunakan ASCII satu baris `$TYPE,key=value,...*CS`. Checksum adalah XOR semua karakter di antara `$` dan `*`, ditulis sebagai dua digit heksadesimal, dan **wajib**; frame tanpa checksum atau dengan checksum salah dibuang tanpa dijawab. Baris yang diawali `$` adalah frame protokol: tidak di-echo dan tidak dibalas prompt oleh console. Raspberry Pi berperan sebagai USB host; konektor USB Blue Pill hanya dapat terhubung ke satu host pada satu waktu.
-
-| Arah | Frame | Kapan |
-|---|---|---|
-| Blue Pill → Pi | `$HELLO,fw=bluepill-0.3,up=1234*CS` | Saat host membuka port (DTR naik) dan sebagai balasan `$HELLO` dari Pi |
-| Blue Pill → Pi | `$STAT,st=TO_CAMERA,zone=IDLE,pv=182.4,heat=0,fan=70,conv=RUN,prox=0,item=3,up=52477,pass=2,fail=1*CS` | Setiap 500 ms; `heat` dan `fan` adalah duty 0–100% |
-| Blue Pill → Pi | `$DET,id=1*78` | PCB diam 300 ms di bawah kamera; diulang tiap 300 ms (maks. 3 kali) sampai Pi membalas `$ACK` |
-| Blue Pill → Pi | `$ACK,id=1*64` | Setiap `$RES` diterima, juga yang terlambat, agar Pi berhenti mengirim ulang |
-| Blue Pill → Pi | `$SORT,id=1,bin=PASS*52` / `$SORT,id=1,bin=REJECT,why=TIMEOUT*60` | Servo kembali ke tengah |
-| Blue Pill → Pi | `$EVT,code=MOTOR_FAULT*CS` | Masuk state fault (`ESTOP`, `MOTOR_FAULT`, `PCB_TIMEOUT`, `HEATER_FAULT`) dan `RESET` setelah fault di-acknowledge |
-| Pi → Blue Pill | `$ACK,id=1*64` | `$DET` diterima |
-| Pi → Blue Pill | `$RES,id=1,v=PASS,code=-,n=0,ms=180*57` | Hasil inspeksi (`v=PASS` atau `v=FAIL`, `code` = kode cacat pertama) |
-| Pi → Blue Pill | `$HB,cv=READY*45` | Setiap 1 detik; OLED menampilkan `VIS:OK`/`VIS:--`. Tidak pernah menahan siklus. |
-| Pi → Blue Pill | `$HELLO,v=1*14` | Saat Pi membuka port |
-
-Nilai `st` pada `$STAT`: `IDLE`, `TO_HEATER` (START, TO-MID), `HEATING` (HEAT-5S), `TO_CAMERA` (TO-END), `INSPECT`, `SORT` (SWIPE-R/L, CENTER), `ESTOP`, `FAULT` (MOTOR-ERR, PCB-TIME, HEAT-ERR). Nilai `zone`: `IDLE`, `PREHEAT`, `SOAK`, `REFLOW`, `COOL`, `TEST` (uji heater berdurasi).
-
-`$RES` hanya dipakai bila `id`-nya sama dengan PCB yang sedang `INSPECT`; hasil lama atau untuk PCB lain diabaikan (tetap dibalas `$ACK`). Tidak ada jawaban dalam 3 detik setelah `$DET` pertama berarti PCB disapu ke kiri (REJECT) dan siklus tetap berjalan; `$SORT` membawa `why=TIMEOUT`. Tidak ada lagi hasil PASS otomatis. Untuk uji bench tanpa Raspberry Pi, `INSPECTION_BENCH_AUTO_PASS_MS` di `inspection.c` dapat diisi sementara; nilainya harus 0 pada line.
-
-Selama port tidak dibuka host (DTR rendah), tidak ada frame yang dikirim, tetapi settle dan timeout tetap berjalan sehingga PCB tetap berakhir di salah satu sisi.
-
-Uji host logika inspeksi (tanpa board, memakai GCC PC): lihat `tests/host/README.md`.
-
-> [!WARNING]
-> Motor dan servo tidak boleh disuplai dari pin 3,3 V Blue Pill. Gunakan driver dan supply terpisah dengan common ground, level logika yang aman, sekering, serta emergency stop fisik. Pastikan arah H-bridge benar sebelum menjalankan siklus karena firmware ini hanya mengatur duty, bukan arah.
+Rancangan alur layar dan animasi status ada di [DESAIN_MENU_OLED.md](DESAIN_MENU_OLED.md).
 
 ## Optimasi RAM
 
@@ -513,6 +360,7 @@ Task flash mengubah ELF menjadi BIN terlebih dahulu, kemudian menjalankan `hid-f
 | `Core/Src/thermistor.c` | Model NTC, kalibrasi dua titik, validasi, dan penyimpanan flash |
 | `Core/Src/ssd1306.c` | Driver OLED SSD1306 |
 | `Core/Src/text_format.c` | Formatter teks ringan tanpa overhead `snprintf` |
+| `tools/log_plate.py` | Pencatat `$STAT` valid ke CSV dengan waktu STM32 dan waktu komputer untuk dibandingkan dengan termokopel PCB eksternal |
 | `USB_DEVICE/App/usbd_cdc_if.c` | USB CDC serta mekanisme reset menuju HID bootloader |
 | `Core/Src/{adc,i2c,tim,usart,gpio}.c` | Konfigurasi peripheral hasil STM32CubeMX |
 | `STM32F103xx_FLASH.ld` | Layout RAM/flash aplikasi dan reservasi kalibrasi |

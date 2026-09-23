@@ -93,10 +93,13 @@ void ConveyorSequencer_RequestStart(ConveyorSequencer *sequence)
 
 void ConveyorSequencer_RequestAbort(ConveyorSequencer *sequence)
 {
-  if ((sequence != NULL) && (sequence->state != CONVEYOR_SEQ_IDLE))
+  if (sequence == NULL)
   {
-    sequence->abort_requested = 1U;
+    return;
   }
+  /* Set abort first so a START racing with STOP cannot run unnoticed. */
+  sequence->abort_requested = 1U;
+  sequence->start_requested = 0U;
 }
 
 void ConveyorSequencer_NotifyHeaterDone(ConveyorSequencer *sequence,
@@ -292,7 +295,7 @@ const char *ConveyorSequencer_StateName(ConveyorSequenceState state)
   {
     case CONVEYOR_SEQ_START_REQUESTED: return "START";
     case CONVEYOR_SEQ_MOVING_TO_HEATER: return "TO-MID";
-    case CONVEYOR_SEQ_HEATING_WAIT: return "HEAT-5S";
+    case CONVEYOR_SEQ_HEATING_WAIT: return "HEAT";
     case CONVEYOR_SEQ_MOVING_TO_INSPECTION: return "TO-END";
     case CONVEYOR_SEQ_INSPECTION: return "INSPECT";
     case CONVEYOR_SEQ_SERVO_RIGHT: return "SWIPE-R";

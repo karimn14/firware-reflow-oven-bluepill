@@ -53,7 +53,7 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 static StaticTask_t inputTaskControlBlock;
-static StackType_t inputTaskStack[96];
+static StackType_t inputTaskStack[192];
 TaskHandle_t inputTaskHandle;
 static StaticTask_t cdcTaskControlBlock;
 static StackType_t cdcTaskStack[224];   /* console + Pi protocol frames */
@@ -72,7 +72,7 @@ TaskHandle_t inspectionTaskHandle;
 /* Definitions for defaultTask */
 TaskHandle_t defaultTaskHandle;
 static StaticTask_t defaultTaskControlBlock;
-static StackType_t defaultTaskStack[192];
+static StackType_t defaultTaskStack[256];
 static StaticTask_t idleTaskControlBlock;
 static StackType_t idleTaskStack[configMINIMAL_STACK_SIZE];
 
@@ -232,4 +232,3 @@ void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)
 }
 
 /* USER CODE END Application */
-

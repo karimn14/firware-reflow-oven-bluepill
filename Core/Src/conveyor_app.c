@@ -11,6 +11,7 @@
 
 static ConveyorSequencer conveyor_sequence;
 static uint8_t heating_seen_running;
+static volatile uint8_t full_reflow_requested;
 static volatile uint8_t manual_motor_test_active;
 static volatile uint8_t manual_motor_test_duty;
 
@@ -31,6 +32,7 @@ void ConveyorApp_Init(void)
 
   ConveyorSequencer_Init(&conveyor_sequence, &config);
   heating_seen_running = 0U;
+  full_reflow_requested = 0U;
   manual_motor_test_active = 0U;
   manual_motor_test_duty = 0U;
 }
@@ -43,8 +45,12 @@ static void update_heater_handshake(ConveyorSequenceState previous_state)
       && (previous_state != CONVEYOR_SEQ_HEATING_WAIT))
   {
     heating_seen_running = 0U;
-    if (Reflow_RequestTimedTest(CONVEYOR_E2E_HEATING_DURATION_MS,
-                                CONVEYOR_E2E_HEATER_DUTY_PERCENT) == 0U)
+    if (full_reflow_requested != 0U)
+    {
+      Reflow_RequestStart();
+    }
+    else if (Reflow_RequestTimedTest(CONVEYOR_E2E_HEATING_DURATION_MS,
+                                     CONVEYOR_E2E_HEATER_DUTY_PERCENT) == 0U)
     {
       ConveyorSequencer_NotifyHeaterDone(&conveyor_sequence, 0U);
     }
@@ -116,7 +122,7 @@ void ConveyorApp_Task(void *argument)
   }
 }
 
-uint8_t ConveyorApp_RequestStart(void)
+static uint8_t request_start(uint8_t full_reflow)
 {
   HardwareTestStatus hardware;
 
@@ -130,8 +136,21 @@ uint8_t ConveyorApp_RequestStart(void)
   {
     return 0U;
   }
+  full_reflow_requested = full_reflow;
+  conveyor_sequence.config.heater_timeout_ms = (full_reflow != 0U)
+      ? CONVEYOR_REFLOW_HEATER_TIMEOUT_MS : CONVEYOR_HEATER_TIMEOUT_MS;
   ConveyorSequencer_RequestStart(&conveyor_sequence);
   return 1U;
+}
+
+uint8_t ConveyorApp_RequestStart(void)
+{
+  return request_start(0U);
+}
+
+uint8_t ConveyorApp_RequestStartProfile(void)
+{
+  return request_start(1U);
 }
 
 void ConveyorApp_RequestAbort(void)

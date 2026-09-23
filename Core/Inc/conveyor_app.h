@@ -24,6 +24,7 @@ typedef struct
 void ConveyorApp_Init(void);
 void ConveyorApp_Task(void *argument);
 uint8_t ConveyorApp_RequestStart(void);
+uint8_t ConveyorApp_RequestStartProfile(void);
 void ConveyorApp_RequestAbort(void);
 void ConveyorApp_AcknowledgeFault(void);
 void ConveyorApp_AdjustSpeed(int8_t steps);

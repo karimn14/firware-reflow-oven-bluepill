@@ -233,6 +233,8 @@ uint8_t Reflow_RequestTimedTest(uint32_t duration_ms, uint8_t duty_percent)
 void Reflow_RequestStop(void)
 {
   stop_requested = 1U;
+  start_requested = 0U;
+  timed_test_requested = 0U;
 }
 
 void Reflow_SelectNextProfile(void)
