@@ -28,7 +28,7 @@
 #define CONVEYOR_IR_ACTIVE_LOW                  1U
 
 #define CONVEYOR_SERVO_TIM                     (&htim2)
-#define CONVEYOR_SERVO_CHANNEL                 TIM_CHANNEL_2
+#define CONVEYOR_SERVO_CHANNEL                 TIM_CHANNEL_3
 #define CONVEYOR_SERVO_LEFT_US                 1000U
 #define CONVEYOR_SERVO_CENTER_US               1500U
 #define CONVEYOR_SERVO_RIGHT_US                2000U

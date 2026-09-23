@@ -79,7 +79,7 @@ Nilai posisi encoder, deadband motor, duty conveyor, dan pulse servo pada firmwa
 | Fungsi | Pin MCU | Peripheral | Konfigurasi/keterangan |
 |---|---:|---|---|
 | Thermistor | PA0 | ADC1 IN0 | Input analog, 12-bit |
-| Servo sorter | PA1 | TIM2 CH2 | PWM 50 Hz, 1 µs/tick; 1000/1500/2000 µs |
+| Servo sorter | PA2 | TIM2 CH3 | PWM 50 Hz, 1 µs/tick; 1000/1500/2000 µs |
 | Heater / SSR | PA6 | GPIO output | Aktif-high; time-proportioning software dengan jendela 1 detik |
 | PWM fan 4-wire | PA7 | TIM3 CH2 | PWM 25 kHz open-drain; active braking PID dan cooling reflow |
 | Encoder conveyor | PA8 | TIM1 CH1 | External clock rising-edge, pull-down, filter digital IC1F=`0xF` |
@@ -115,6 +115,46 @@ Topologi kebalikannya juga dapat dikenali setelah dua titik kalibrasi yang valid
 
 ## Cara menggunakan program
 
+### Uji servo dari firmware utama
+
+Di OLED, buka **Beranda → Diagnostik → Uji Servo**. Pilih **kiri (1000 µs)**,
+**tengah (1500 µs)**, atau **kanan (2000 µs)** dengan **B/C**. Tekan **A**
+untuk mengaktifkan servo; B/C lalu langsung mengubah posisinya. Tekan **A**
+lagi untuk berhenti, atau **D** untuk kembali. Servo kembali ke tengah saat
+uji dihentikan atau menu ditutup. Uji ini hanya dapat dimulai ketika proses
+conveyor, motor manual, dan pemanasan sedang tidak aktif. Sinyal servo sekarang
+keluar dari **PA2 (TIM2 CH3)**. Multimeter DC biasanya membaca rata-rata hanya
+sekitar 0,17–0,33 V untuk pulsa 3,3 V berdurasi 1–2 ms setiap 20 ms; gunakan
+osiloskop atau logic analyzer untuk memeriksa lebar pulsa dan perubahan posisi.
+
+### Uji servo saja
+
+Build firmware khusus servo dengan:
+
+```bash
+cmake --preset ServoTest
+cmake --build --preset ServoTest
+arm-none-eabi-objcopy -O binary \
+  build/ServoTest/test-bluepill-1.elf \
+  build/ServoTest/test-bluepill-1.bin
+```
+
+Flash `build/ServoTest/test-bluepill-1.bin` melalui HID bootloader proyek.
+Firmware ini memakai alamat aplikasi bootloader `0x08000800`.
+Sambungkan sinyal servo ke **PA2**, daya servo ke suplai **5 V eksternal** yang
+sesuai, dan GND suplai ke GND Blue Pill. Jangan mengambil daya servo dari pin
+3,3 V Blue Pill.
+
+Setelah menyala, servo menahan posisi tengah selama 2 detik, lalu berulang:
+**1000 µs (kiri) → 1500 µs (tengah) → 2000 µs (kanan) → 1500 µs (tengah)**,
+masing-masing 2 detik. Hanya TIM2 CH3 yang diinisialisasi; motor, heater,
+fan, USB CDC, dan task aplikasi tidak dijalankan. Jika servo menyentuh batas
+mekanik, kecilkan rentang pulsa pada `Core/Src/servo_test.c` sebelum pengujian
+ulang. Untuk kembali ke firmware biasa, build preset `Release` dan flash
+hasilnya. Karena mode uji tidak menjalankan USB CDC, masuk ke bootloader secara
+manual sesuai metode aktivasi bootloader pada board sebelum flash berikutnya;
+task flash Zed yang memicu reset lewat CDC tidak dapat dipakai dari mode ini.
+
 Saat boot, OLED membuka **Beranda** dan semua aktuator mati. Pilih menu dengan **B** (naik) dan **C** (turun), lalu tekan **A** untuk membuka. **D singkat** kembali; **D tahan minimal 1,5 detik** kembali ke Beranda atau menghentikan proses aktif. Saat proses aktif, D singkat menukar tampilan ringkas/detail tanpa menyembunyikan monitor. Petunjuk yang berlaku selalu ditampilkan di bagian bawah OLED.
 
 | Menu | Fungsi |
@@ -125,7 +165,7 @@ Saat boot, OLED membuka **Beranda** dan semua aktuator mati. Pilih menu dengan *
 | Profil suhu | Atur target preheat, soaking, dan reflow saat idle; tinjau durasi, lalu jalankan profil tanpa conveyor. |
 | Kalibrasi NTC | Ambil dua titik dengan suhu referensi, gunakan pemanas bantu bila perlu, lalu simpan ke flash setelah keduanya valid. |
 | Kendali PID | Atur setpoint, Kp, Ki, Kd saat idle; jalankan dan pantau kontrol suhu. |
-| Diagnostik | Karakterisasi heater, uji heater manual dengan cutoff, serta uji motor DC. |
+| Diagnostik | Karakterisasi heater, uji heater manual dengan cutoff, uji motor DC, dan uji servo. |
 | Status alat | Lihat sensor, kalibrasi, vision, heater, fan, motor, dan interlock. |
 
 ### End to end

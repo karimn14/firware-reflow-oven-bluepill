@@ -2,6 +2,7 @@
 
 #include "adc.h"
 #include "conveyor_app.h"
+#include "conveyor_config.h"
 #include "gpio.h"
 #include "heater_characterization.h"
 #include "i2c.h"
@@ -49,6 +50,12 @@
 #define MOTOR_TEST_MIN_DUTY              30U
 #define MOTOR_TEST_DUTY_STEP             10U
 
+static const uint16_t servo_test_pulses_us[3] = {
+  CONVEYOR_SERVO_LEFT_US,
+  CONVEYOR_SERVO_CENTER_US,
+  CONVEYOR_SERVO_RIGHT_US
+};
+
 typedef struct
 {
   GPIO_TypeDef *port;
@@ -70,7 +77,8 @@ typedef enum
   SCREEN_CHARACTERIZATION,
   SCREEN_MOTOR_TEST,
   SCREEN_CONVEYOR,
-  SCREEN_HOME
+  SCREEN_HOME,
+  SCREEN_SERVO_TEST
 } Screen;
 
 typedef enum
@@ -173,9 +181,11 @@ static float pid_p_term;
 static float pid_i_term;
 static float pid_d_term;
 static uint8_t motor_test_duty_percent = MOTOR_TEST_DEFAULT_DUTY;
+static uint8_t servo_test_selection = 1U;
 
 static void ui_button(uint8_t button);
 static void ui_adjust(int8_t direction);
+static void ui_line(uint8_t row, const char *value);
 
 static ButtonState buttons[4] = {
   {BTN_A_GPIO_Port, BTN_A_Pin, 0U, 0U, 0U, 0U, 0U, 0U},
@@ -666,6 +676,11 @@ static void ui_stop(void)
     {
       ConveyorApp_ManualMotorStop();
     }
+    else if (current_screen == SCREEN_SERVO_TEST)
+    {
+      ConveyorApp_ManualServoStop();
+      servo_test_selection = 1U;
+    }
     else
     {
       HardwareTest_HeaterStop();
@@ -711,6 +726,11 @@ static uint8_t ui_is_active(void)
       ConveyorApp_GetStatus(&conveyor);
       return conveyor.manual_test_active;
     }
+    if (current_screen == SCREEN_SERVO_TEST)
+    {
+      ConveyorApp_GetStatus(&conveyor);
+      return conveyor.manual_servo_test_active;
+    }
     return heater_enabled;
   }
   return 0U;
@@ -722,6 +742,7 @@ static uint8_t ui_any_active(void)
   ConveyorApp_GetStatus(&conveyor);
   return ((conveyor.state != CONVEYOR_SEQ_IDLE)
           || (conveyor.manual_test_active != 0U)
+          || (conveyor.manual_servo_test_active != 0U)
           || (Reflow_IsRunning() != 0U)
           || (HeaterCharacterization_IsRunning() != 0U)
           || (pid_running != 0U) || (heater_enabled != 0U)) ? 1U : 0U;
@@ -739,6 +760,7 @@ static void ui_stop_all(void)
       && (conveyor.state != CONVEYOR_SEQ_HEATER_FAULT)))
     ConveyorApp_RequestAbort();
   ConveyorApp_ManualMotorStop();
+  ConveyorApp_ManualServoStop();
   if ((Reflow_IsRunning() != 0U) || (ui_page == UI_PROFILE_RUN))
     Reflow_RequestStop();
   if ((HeaterCharacterization_IsRunning() != 0U)
@@ -904,7 +926,7 @@ static void ui_button(uint8_t button)
     else if (ui_page == UI_PID_MENU)
       ui_pid_selection = (uint8_t)((ui_pid_selection + 5 + delta) % 5);
     else if (ui_page == UI_DIAG_MENU)
-      ui_diag_selection = (uint8_t)((ui_diag_selection + 3 + delta) % 3);
+      ui_diag_selection = (uint8_t)((ui_diag_selection + 4 + delta) % 4);
     else if ((ui_page == UI_E2E_PREP) && (ui_e2e_profile != 2U))
       ConveyorApp_AdjustSpeed((button == 1U) ? 1 : -1);
     else if ((ui_page == UI_PROFILE_EDIT) || (ui_page == UI_PID_EDIT)
@@ -928,6 +950,17 @@ static void ui_button(uint8_t button)
         {
           motor_test_duty_percent = (uint8_t)duty;
           ConveyorApp_ManualMotorSetDuty(motor_test_duty_percent);
+        }
+      }
+      else if (current_screen == SCREEN_SERVO_TEST)
+      {
+        int8_t next = (int8_t)servo_test_selection
+                      + ((button == 1U) ? -1 : 1);
+        if ((next >= 0) && (next <= 2))
+        {
+          servo_test_selection = (uint8_t)next;
+          ConveyorApp_ManualServoSetPulse(
+              servo_test_pulses_us[servo_test_selection]);
         }
       }
       else if (current_screen == SCREEN_HEATER && ui_is_active() == 0U)
@@ -1101,7 +1134,12 @@ static void ui_button(uint8_t button)
   {
     if (ui_diag_selection == 0U) current_screen = SCREEN_CHARACTERIZATION;
     else if (ui_diag_selection == 1U) current_screen = SCREEN_HEATER;
-    else current_screen = SCREEN_MOTOR_TEST;
+    else if (ui_diag_selection == 2U) current_screen = SCREEN_MOTOR_TEST;
+    else
+    {
+      current_screen = SCREEN_SERVO_TEST;
+      servo_test_selection = 1U;
+    }
     ui_open(UI_DIAG_RUN);
   }
   else if (ui_page == UI_DIAG_RUN)
@@ -1122,6 +1160,12 @@ static void ui_button(uint8_t button)
           && (HardwareTest_HeaterStartAtDuty(
                 heater_manual_duty_percent, MANUAL_HEATER_LIMIT_TENTHS) == 0U))
         ui_show_message(UI_MSG_HOT, UI_DIAG_RUN);
+    }
+    else if (current_screen == SCREEN_SERVO_TEST)
+    {
+      if (ConveyorApp_ManualServoStart(
+              servo_test_pulses_us[servo_test_selection]) == 0U)
+        ui_show_message(UI_MSG_BUSY, UI_DIAG_RUN);
     }
     else if (ConveyorApp_ManualMotorStart(motor_test_duty_percent) == 0U)
       ui_show_message(UI_MSG_BUSY, UI_DIAG_RUN);
@@ -1585,6 +1629,27 @@ static void draw_motor_test_screen(void)
   SSD1306_DrawString(&oled, 0U, 7U, "B:+10 C:-10 D:NEXT");
 }
 
+static void draw_servo_test_screen(void)
+{
+  ConveyorAppStatus conveyor;
+  char line[22];
+  static const char *const positions[3] = {"KIRI", "TENGAH", "KANAN"};
+
+  ConveyorApp_GetStatus(&conveyor);
+  ui_line(0U, "UJI SERVO PA2");
+  ui_line(2U, conveyor.manual_servo_test_active ? "STATUS: AKTIF"
+                                                : "STATUS: SIAP");
+  (void)TextFormat(line, sizeof(line), "POSISI: %s",
+                   positions[servo_test_selection]);
+  ui_line(3U, line);
+  (void)TextFormat(line, sizeof(line), "PULSA: %u us",
+                   servo_test_pulses_us[servo_test_selection]);
+  ui_line(4U, line);
+  ui_line(6U, conveyor.manual_servo_test_active ? "A:STOP B/C:POSISI"
+                                                : "A:MULAI B/C:POSISI");
+  ui_line(7U, "D:TENGAH & KEMBALI");
+}
+
 static void ui_line(uint8_t row, const char *value)
 {
   memset(&oled.buffer[(uint16_t)row * SSD1306_WIDTH], 0, SSD1306_WIDTH);
@@ -1681,7 +1746,7 @@ static void ui_draw(void)
     "TITIK 1", "TITIK 2", "PEMANAS BANTU", "SIMPAN KALIBRASI"
   };
   static const char *const diag_items[] = {
-    "KARAKTER HEATER", "UJI HEATER MANUAL", "UJI MOTOR DC"
+    "KARAKTER HEATER", "UJI HEATER MANUAL", "UJI MOTOR DC", "UJI SERVO"
   };
   char line[22];
   char temperature[10] = "--.-";
@@ -2008,8 +2073,8 @@ static void ui_draw(void)
   }
   else if (ui_page == UI_DIAG_MENU)
   {
-    ui_list("DIAGNOSTIK", diag_items, 3U, ui_diag_selection, 1U, 3U);
-    ui_line(5U, "MOTOR / PEMANAS");
+    ui_list("DIAGNOSTIK", diag_items, 4U, ui_diag_selection, 1U, 4U);
+    ui_line(5U, "MOTOR / SERVO / HEAT");
     ui_line(6U, "AWALNYA MATI");
     ui_line(7U, "B:^ C:v A:BUKA D:<");
   }
@@ -2017,9 +2082,13 @@ static void ui_draw(void)
   {
     if (current_screen == SCREEN_CHARACTERIZATION) draw_characterization_screen();
     else if (current_screen == SCREEN_MOTOR_TEST) draw_motor_test_screen();
+    else if (current_screen == SCREEN_SERVO_TEST) draw_servo_test_screen();
     else draw_heater_screen(((uint32_t)latest_adc * ADC_REFERENCE_MV) / ADC_FULL_SCALE);
-    ui_line(6U, ui_is_active() ? "A:STOP" : "A:MULAI B:+ C:-");
-    ui_line(7U, "D:MATI & KEMBALI");
+    if (current_screen != SCREEN_SERVO_TEST)
+    {
+      ui_line(6U, ui_is_active() ? "A:STOP" : "A:MULAI B:+ C:-");
+      ui_line(7U, "D:MATI & KEMBALI");
+    }
   }
   else if (ui_page == UI_STATUS)
   {

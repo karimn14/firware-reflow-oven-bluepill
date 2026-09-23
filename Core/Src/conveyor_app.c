@@ -14,6 +14,7 @@ static uint8_t heating_seen_running;
 static volatile uint8_t full_reflow_requested;
 static volatile uint8_t manual_motor_test_active;
 static volatile uint8_t manual_motor_test_duty;
+static volatile uint8_t manual_servo_test_active;
 
 void ConveyorApp_Init(void)
 {
@@ -35,6 +36,7 @@ void ConveyorApp_Init(void)
   full_reflow_requested = 0U;
   manual_motor_test_active = 0U;
   manual_motor_test_duty = 0U;
+  manual_servo_test_active = 0U;
 }
 
 static void update_heater_handshake(ConveyorSequenceState previous_state)
@@ -243,6 +245,55 @@ void ConveyorApp_ManualMotorStop(void)
   ProcessInterlock_Give(PROCESS_OWNER_CONVEYOR);
 }
 
+uint8_t ConveyorApp_ManualServoStart(uint16_t pulse_us)
+{
+  HardwareTestStatus hardware;
+
+  HardwareTest_GetStatus(&hardware);
+  if ((manual_servo_test_active != 0U)
+      || (conveyor_sequence.state != CONVEYOR_SEQ_IDLE)
+      || (ProcessInterlock_GetOwner() != PROCESS_OWNER_NONE)
+      || (hardware.heater_enabled != 0U)
+      || (hardware.pid_running != 0U)
+      || (Reflow_IsRunning() != 0U)
+      || (HeaterCharacterization_IsRunning() != 0U)
+      || (ProcessInterlock_Take(PROCESS_OWNER_CONVEYOR, 0U) == 0U))
+  {
+    return 0U;
+  }
+
+  taskENTER_CRITICAL();
+  manual_servo_test_active = 1U;
+  ConveyorServo_SetPulseUs(&conveyor_sequence.servo, pulse_us);
+  taskEXIT_CRITICAL();
+  return 1U;
+}
+
+void ConveyorApp_ManualServoSetPulse(uint16_t pulse_us)
+{
+  if (manual_servo_test_active == 0U)
+  {
+    return;
+  }
+  taskENTER_CRITICAL();
+  ConveyorServo_SetPulseUs(&conveyor_sequence.servo, pulse_us);
+  taskEXIT_CRITICAL();
+}
+
+void ConveyorApp_ManualServoStop(void)
+{
+  if (manual_servo_test_active == 0U)
+  {
+    return;
+  }
+  taskENTER_CRITICAL();
+  ConveyorServo_SetPulseUs(&conveyor_sequence.servo,
+                           conveyor_sequence.config.servo_center_us);
+  manual_servo_test_active = 0U;
+  taskEXIT_CRITICAL();
+  ProcessInterlock_Give(PROCESS_OWNER_CONVEYOR);
+}
+
 void ConveyorApp_ManualInspectionResult(uint8_t pass)
 {
   ConveyorSequencer_NotifyInspection(&conveyor_sequence, pass);
@@ -250,7 +301,8 @@ void ConveyorApp_ManualInspectionResult(uint8_t pass)
 
 void ConveyorApp_CenterServo(void)
 {
-  if (conveyor_sequence.state == CONVEYOR_SEQ_IDLE)
+  if ((conveyor_sequence.state == CONVEYOR_SEQ_IDLE)
+      && (manual_servo_test_active == 0U))
   {
     ConveyorServo_SetPulseUs(&conveyor_sequence.servo,
                              conveyor_sequence.config.servo_center_us);
@@ -275,6 +327,7 @@ void ConveyorApp_GetStatus(ConveyorAppStatus *status)
   status->speed_percent = conveyor_sequence.config.speed_percent;
   status->motor_percent = conveyor_sequence.motion.motor.duty_percent;
   status->manual_test_active = manual_motor_test_active;
+  status->manual_servo_test_active = manual_servo_test_active;
   status->ir_detected = conveyor_sequence.ir_detected;
   taskEXIT_CRITICAL();
 }

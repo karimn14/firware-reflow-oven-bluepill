@@ -18,6 +18,7 @@ typedef struct
   uint8_t speed_percent;
   uint8_t motor_percent;
   uint8_t manual_test_active;
+  uint8_t manual_servo_test_active;
   uint8_t ir_detected;
 } ConveyorAppStatus;
 
@@ -31,6 +32,9 @@ void ConveyorApp_AdjustSpeed(int8_t steps);
 uint8_t ConveyorApp_ManualMotorStart(uint8_t duty_percent);
 void ConveyorApp_ManualMotorSetDuty(uint8_t duty_percent);
 void ConveyorApp_ManualMotorStop(void);
+uint8_t ConveyorApp_ManualServoStart(uint16_t pulse_us);
+void ConveyorApp_ManualServoSetPulse(uint16_t pulse_us);
+void ConveyorApp_ManualServoStop(void);
 void ConveyorApp_ManualInspectionResult(uint8_t pass);
 void ConveyorApp_CenterServo(void);
 void ConveyorApp_GetStatus(ConveyorAppStatus *status);

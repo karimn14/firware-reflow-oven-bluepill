@@ -27,6 +27,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 # Core project settings
 project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
+option(SERVO_TEST_ONLY "Build firmware that only exercises the servo" OFF)
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
@@ -65,6 +66,11 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/text_format.c
     Core/Src/thermistor.c
 )
+
+if(SERVO_TEST_ONLY)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/servo_test.c)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SERVO_TEST_ONLY)
+endif()
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
