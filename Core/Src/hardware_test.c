@@ -47,6 +47,12 @@
 #define PID_PREDICTION_HORIZON_S    12.0f
 #define PID_MAX_HEATER_DUTY         50.0f
 #define PID_INTEGRAL_MAX            35.0f
+#define THERMAL_RUNAWAY_WATCH_PERIOD_MS    30000UL
+#define THERMAL_RUNAWAY_MIN_DUTY            20U
+#define THERMAL_RUNAWAY_MIN_RISE_TENTHS     12
+#define THERMAL_RUNAWAY_MAX_DROP_TENTHS     30
+#define THERMAL_RUNAWAY_TARGET_MARGIN_TENTHS 20
+#define THERMAL_RUNAWAY_HYSTERESIS_TENTHS   80
 #define MOTOR_TEST_DEFAULT_DUTY          40U
 #define MOTOR_TEST_MIN_DUTY              30U
 #define MOTOR_TEST_DUTY_STEP             10U
@@ -185,6 +191,10 @@ static float pid_i_term;
 static float pid_d_term;
 static uint8_t motor_test_duty_percent = MOTOR_TEST_DEFAULT_DUTY;
 static uint8_t servo_test_selection = 1U;
+static uint8_t thermal_runaway_fault;
+static uint8_t thermal_runaway_active;
+static uint32_t thermal_runaway_timer;
+static int16_t thermal_runaway_ref_tenths;
 
 static void ui_button(uint8_t button);
 static void ui_adjust(int8_t direction);
@@ -330,6 +340,12 @@ static void set_fan_output(uint8_t duty_percent)
 
 static void enforce_direct_heater_safety(void)
 {
+  if (thermal_runaway_fault != 0U)
+  {
+    heater_enabled = 0U;
+    set_heater_output();
+    return;
+  }
   if ((heater_safety_limit_tenths > 0)
       && (heater_enabled != 0U)
       && ((latest_temperature_valid == 0U)
@@ -368,12 +384,140 @@ static void pid_stop(uint8_t fault)
 {
   pid_running = 0U;
   pid_fault = fault;
+  thermal_runaway_active = 0U;
   pid_integral = 0.0f;
   pid_p_term = 0.0f;
   pid_i_term = 0.0f;
   pid_d_term = 0.0f;
   pid_apply_output(0.0f);
   set_fan_output((fault != 0U) ? 100U : 0U);
+}
+
+static void trigger_thermal_runaway_fault(void)
+{
+  thermal_runaway_fault = 1U;
+  thermal_runaway_active = 0U;
+  heater_enabled = 0U;
+  heater_duty_percent = 0U;
+  heater_safety_limit_tenths = 0;
+  set_heater_output();
+  if (pid_running != 0U)
+  {
+    pid_stop(1U);
+  }
+  else
+  {
+    set_fan_output(100U);
+  }
+}
+
+static void check_thermal_runaway(void)
+{
+  uint32_t now;
+  uint8_t heating;
+  int16_t current_temp;
+
+  if (thermal_runaway_fault != 0U)
+  {
+    heater_enabled = 0U;
+    set_heater_output();
+    return;
+  }
+
+  if (latest_temperature_valid == 0U)
+  {
+    return;
+  }
+
+  heating = ((heater_enabled != 0U)
+             && (heater_duty_percent >= THERMAL_RUNAWAY_MIN_DUTY)) ? 1U : 0U;
+
+  if (heating == 0U)
+  {
+    thermal_runaway_active = 0U;
+    return;
+  }
+
+  now = HAL_GetTick();
+  current_temp = latest_temperature_tenths;
+
+  if (thermal_runaway_active == 0U)
+  {
+    thermal_runaway_active = 1U;
+    thermal_runaway_timer = now;
+    thermal_runaway_ref_tenths = current_temp;
+    return;
+  }
+
+  if (pid_running != 0U)
+  {
+    int16_t error_tenths = pid_setpoint_tenths - current_temp;
+
+    if (error_tenths >= THERMAL_RUNAWAY_TARGET_MARGIN_TENTHS)
+    {
+      if (current_temp < (thermal_runaway_ref_tenths - THERMAL_RUNAWAY_MAX_DROP_TENTHS))
+      {
+        trigger_thermal_runaway_fault();
+        return;
+      }
+
+      if ((current_temp - thermal_runaway_ref_tenths) >= THERMAL_RUNAWAY_MIN_RISE_TENTHS)
+      {
+        thermal_runaway_ref_tenths = current_temp;
+        thermal_runaway_timer = now;
+      }
+      else if ((now - thermal_runaway_timer) >= THERMAL_RUNAWAY_WATCH_PERIOD_MS)
+      {
+        trigger_thermal_runaway_fault();
+        return;
+      }
+    }
+    else
+    {
+      if ((error_tenths >= THERMAL_RUNAWAY_HYSTERESIS_TENTHS)
+          && (heater_duty_percent >= 30U))
+      {
+        if ((now - thermal_runaway_timer) >= THERMAL_RUNAWAY_WATCH_PERIOD_MS)
+        {
+          trigger_thermal_runaway_fault();
+          return;
+        }
+      }
+      else
+      {
+        thermal_runaway_ref_tenths = current_temp;
+        thermal_runaway_timer = now;
+      }
+    }
+  }
+  else
+  {
+    if ((heater_safety_limit_tenths > 0)
+        && (current_temp >= (heater_safety_limit_tenths - 20)))
+    {
+      thermal_runaway_ref_tenths = current_temp;
+      thermal_runaway_timer = now;
+    }
+    else
+    {
+      if (current_temp < (thermal_runaway_ref_tenths - THERMAL_RUNAWAY_MAX_DROP_TENTHS))
+      {
+        trigger_thermal_runaway_fault();
+        return;
+      }
+
+      if ((current_temp - thermal_runaway_ref_tenths) >= THERMAL_RUNAWAY_MIN_RISE_TENTHS)
+      {
+        thermal_runaway_ref_tenths = current_temp;
+        thermal_runaway_timer = now;
+      }
+      else if ((now - thermal_runaway_timer) >= THERMAL_RUNAWAY_WATCH_PERIOD_MS)
+      {
+        trigger_thermal_runaway_fault();
+        return;
+      }
+    }
+  }
 }
 
 static uint8_t pid_start(void)
@@ -391,6 +535,10 @@ static uint8_t pid_start(void)
 
   measurement = (float)latest_temperature_tenths / 10.0f;
   pid_fault = 0U;
+  thermal_runaway_fault = 0U;
+  thermal_runaway_active = 0U;
+  thermal_runaway_timer = HAL_GetTick();
+  thermal_runaway_ref_tenths = latest_temperature_tenths;
   pid_running = 1U;
   pid_integral = 0.0f;
   pid_ramped_setpoint = measurement;
@@ -1775,7 +1923,13 @@ static const char *ui_message_text(void)
         if (latest_temperature_tenths >= 1250) return "SUHU TERLALU TINGGI";
         return "PROFIL/PID GAGAL";
       }
-      if (ui_fault_from == UI_PID_RUN) return "PID/SENSOR GAGAL";
+      if (ui_fault_from == UI_PID_RUN)
+      {
+        if (thermal_runaway_fault != 0U) return "RUNAWAY TERMAL";
+        return "PID/SENSOR GAGAL";
+      }
+      if ((ui_fault_from == UI_DIAG_RUN) && (thermal_runaway_fault != 0U))
+        return "RUNAWAY TERMAL";
       return "PROSES GAGAL";
     }
     default: return "STATUS";
@@ -2218,8 +2372,13 @@ static void ui_poll_process(void)
     else if ((ui_run_seen == 0U) && (reflow.fault != 0U))
       ui_show_message(UI_MSG_FAULT, UI_PROFILE_MENU);
   }
-  else if ((ui_page == UI_PID_RUN) && (pid_fault != 0U))
+  else if ((ui_page == UI_PID_RUN)
+           && ((pid_fault != 0U) || (thermal_runaway_fault != 0U)))
     ui_show_message(UI_MSG_FAULT, UI_PID_MENU);
+  else if ((ui_page == UI_DIAG_RUN)
+           && (current_screen == SCREEN_HEATER)
+           && (thermal_runaway_fault != 0U))
+    ui_show_message(UI_MSG_FAULT, UI_DIAG_RUN);
   else if ((ui_page == UI_DIAG_RUN)
            && (current_screen == SCREEN_CHARACTERIZATION))
   {
@@ -2238,6 +2397,8 @@ void HardwareTest_Init(void)
   heater_window_active = 0U;
   heater_window_started_at = HAL_GetTick();
   heater_on_time_ms = 0U;
+  thermal_runaway_fault = 0U;
+  thermal_runaway_active = 0U;
   /* PA6 drives the SSR in a software time-proportioning window. TIM3 is
    * dedicated to the 25 kHz four-wire fan control signal on PA7. */
   HAL_GPIO_WritePin(PWM_HEATER_GPIO_Port, PWM_HEATER_Pin, GPIO_PIN_RESET);
@@ -2277,6 +2438,7 @@ void HardwareTest_InputRun(void)
   update_controls();
   update_button_auto_repeat();
   update_pid_controller();
+  check_thermal_runaway();
   enforce_direct_heater_safety();
   update_heater_output();
   ui_poll_process();
@@ -2346,6 +2508,7 @@ void HardwareTest_GetStatus(HardwareTestStatus *status)
   status->fan_duty_percent = fan_duty_percent;
   status->pid_running = pid_running;
   status->pid_fault = pid_fault;
+  status->thermal_runaway_fault = thermal_runaway_fault;
 }
 
 uint8_t HardwareTest_PIDStartAt(int16_t setpoint_tenths)
@@ -2398,6 +2561,10 @@ uint8_t HardwareTest_HeaterStartAtDuty(uint8_t duty,
     return 0U;
   }
 
+  thermal_runaway_fault = 0U;
+  thermal_runaway_active = 0U;
+  thermal_runaway_timer = HAL_GetTick();
+  thermal_runaway_ref_tenths = latest_temperature_tenths;
   heater_duty_percent = duty;
   heater_safety_limit_tenths = safety_limit_tenths;
   heater_enabled = 1U;
@@ -2409,5 +2576,6 @@ void HardwareTest_HeaterStop(void)
 {
   heater_enabled = 0U;
   heater_safety_limit_tenths = 0;
+  thermal_runaway_active = 0U;
   set_heater_output();
 }
