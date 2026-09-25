@@ -26,6 +26,7 @@ void HardwareTest_Init(void)
 
   (void)HAL_ADCEx_Calibration_Start(&hadc1);
   Thermistor_Init();
+  ht_sensor_init();
   latest_adc = read_adc_average();
   latest_temperature_valid = Thermistor_Calculate(
       latest_adc, &latest_temperature_tenths, &latest_resistance_ohm);

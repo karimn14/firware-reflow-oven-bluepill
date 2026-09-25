@@ -15,17 +15,13 @@
 
 #include <stdint.h>
 
-/* ---- ADC configuration -------------------------------------------------- */
-#define ADC_FULL_SCALE      4095U
-#define ADC_AVERAGE_SAMPLES   32U
+/* ---- ADC DMA configuration ---------------------------------------------- */
+#define ADC_FULL_SCALE        4095U
+#define ADC_DMA_BUFFER_SIZE     32U
 
-/* Reference repeat rate used when the calibration reference auto-tracks the
- * live measurement (user holds B/C in UI_CAL_EDIT). */
-#define REFERENCE_REPEAT_DELAY_MS 400U
-#define REFERENCE_REPEAT_RATE_MS   50U
-
-/* Maximum temperature allowed when the calibration heater is active. */
-#define CALIBRATION_MAX_TEMP_TENTHS 1500
+/* Circular DMA buffer automatically filled by DMA1_Channel1 on TIM3 TRGO triggers */
+static volatile uint16_t adc_dma_buffer[ADC_DMA_BUFFER_SIZE];
+static uint8_t adc_dma_started = 0U;
 
 /* ---- State --------------------------------------------------------------- */
 uint16_t latest_adc;
@@ -38,42 +34,44 @@ uint8_t  calibration_captured_mask;
 uint8_t  calibration_reference_tracks_measurement;
 int16_t  calibration_reference_tenths;
 
+/* ---- ht_sensor_init() ---------------------------------------------------- */
+/* Starts continuous circular DMA sampling triggered by TIM3 TRGO. */
+void ht_sensor_init(void)
+{
+  if (adc_dma_started == 0U)
+  {
+    (void)HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_dma_buffer, ADC_DMA_BUFFER_SIZE);
+    adc_dma_started = 1U;
+  }
+}
+
 /* ---- read_adc_average() -------------------------------------------------- */
-/* Reads ADC_AVERAGE_SAMPLES samples and returns their average with the single
- * minimum and maximum samples discarded (simple outlier rejection). */
+/* Computes the average of the circular DMA buffer with the highest and lowest
+ * samples discarded for outlier rejection. Lock-free and non-blocking. */
 uint16_t read_adc_average(void)
 {
+  if (adc_dma_started == 0U)
+  {
+    ht_sensor_init();
+  }
+
   uint32_t total = 0U;
-  uint16_t valid_samples = 0U;
   uint16_t minimum = ADC_FULL_SCALE;
   uint16_t maximum = 0U;
 
-  for (uint8_t i = 0U; i < ADC_AVERAGE_SAMPLES; ++i)
+  for (uint8_t i = 0U; i < ADC_DMA_BUFFER_SIZE; ++i)
   {
-    if (HAL_ADC_Start(&hadc1) == HAL_OK)
-    {
-      if (HAL_ADC_PollForConversion(&hadc1, 10U) == HAL_OK)
-      {
-        uint16_t sample = (uint16_t)HAL_ADC_GetValue(&hadc1);
-        total += sample;
-        if (sample < minimum) minimum = sample;
-        if (sample > maximum) maximum = sample;
-        ++valid_samples;
-      }
-      (void)HAL_ADC_Stop(&hadc1);
-    }
+    uint16_t sample = adc_dma_buffer[i];
+    total += sample;
+    if (sample < minimum) minimum = sample;
+    if (sample > maximum) maximum = sample;
   }
 
-  if (valid_samples == 0U) return 0U;
+  /* Discard single highest and lowest samples (outlier rejection) */
+  total -= minimum;
+  total -= maximum;
 
-  /* Drop the single highest and lowest before averaging. */
-  if (valid_samples > 2U)
-  {
-    total -= minimum;
-    total -= maximum;
-    valid_samples -= 2U;
-  }
-  return (uint16_t)((total + (valid_samples / 2U)) / valid_samples);
+  return (uint16_t)((total + ((ADC_DMA_BUFFER_SIZE - 2U) / 2U)) / (ADC_DMA_BUFFER_SIZE - 2U));
 }
 
 /* ---- adjust_calibration_reference() -------------------------------------- */

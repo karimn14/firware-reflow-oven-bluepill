@@ -154,6 +154,7 @@ extern UiPage   ui_page;
 /* -------------------------------------------------------------------------
  * Internal functions — ht_sensor.c
  * ---------------------------------------------------------------------- */
+void     ht_sensor_init(void);
 uint16_t read_adc_average(void);
 void     adjust_calibration_reference(int16_t change_tenths);
 
